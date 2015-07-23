@@ -5698,7 +5698,7 @@ lf.backstore.IndexedDB = function(global, schema) {
   this.bundledMode_ = schema.pragma().enableBundledMode || !1;
 };
 lf.backstore.IndexedDB.prototype.init = function(opt_onUpgrade) {
-  var indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+  var indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB || window.shimIndexedDB;
   if (!goog.isDefAndNotNull(indexedDB)) {
     throw new lf.Exception(352);
   }
