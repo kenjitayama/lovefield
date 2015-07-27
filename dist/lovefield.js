@@ -2217,7 +2217,7 @@ goog.async.run = function(callback, opt_context) {
 };
 goog.async.run.initializeRunner_ = function() {
   if (goog.global.Promise && goog.global.Promise.resolve) {
-    var promise = goog.global.Promise.resolve();
+    var promise = goog.global.Promise.resolve(void 0);
     goog.async.run.schedule_ = function() {
       promise.then(goog.async.run.processWorkQueue);
     };
@@ -2715,8 +2715,8 @@ lf.backstore.BaseTx.prototype.mergeIntoBackstore_ = function() {
 };
 lf.backstore.BaseTx.prototype.mergeTableChanges_ = function() {
   var diff = this.journal_.getDiff();
-  diff.getKeys().forEach(function(tableName) {
-    var tableSchema = this.journal_.getScope().get(tableName), table = this.getTable(tableSchema.getName(), goog.bind(tableSchema.deserializeRow, tableSchema)), tableDiff = diff.get(tableName), toDeleteRowIds = tableDiff.getDeleted().getValues().map(function(row) {
+  diff.forEach(function(tableDiff, tableName) {
+    var tableSchema = this.journal_.getScope().get(tableName), table = this.getTable(tableSchema.getName(), goog.bind(tableSchema.deserializeRow, tableSchema)), toDeleteRowIds = tableDiff.getDeleted().getValues().map(function(row) {
       return row.id();
     });
     0 < toDeleteRowIds.length && table.remove(toDeleteRowIds).thenCatch(this.handleError_, this);
@@ -3708,17 +3708,68 @@ goog.structs.Set.prototype.__iterator__ = function() {
   return this.map_.__iterator__(!1);
 };
 
+lf.structs.set = {};
+lf.structs.SetPolyFill_ = function(opt_values) {
+  this.set_ = new goog.structs.Set(opt_values);
+  Object.defineProperty(this, "size", {get:function() {
+    return this.set_.getCount();
+  }});
+};
+lf.structs.SetPolyFill_.prototype.add = function(value) {
+  this.set_.add(value);
+};
+goog.exportProperty(lf.structs.SetPolyFill_.prototype, "add", lf.structs.SetPolyFill_.prototype.add);
+lf.structs.SetPolyFill_.prototype.clear = function() {
+  this.set_.clear();
+};
+goog.exportProperty(lf.structs.SetPolyFill_.prototype, "clear", lf.structs.SetPolyFill_.prototype.clear);
+lf.structs.SetPolyFill_.prototype.delete = function(value) {
+  return this.set_.remove(value);
+};
+goog.exportProperty(lf.structs.SetPolyFill_.prototype, "delete", lf.structs.SetPolyFill_.prototype.delete);
+lf.structs.SetPolyFill_.prototype.forEach = function(fn, opt_this) {
+  this.set_.getValues().forEach(fn, opt_this);
+};
+lf.structs.SetPolyFill_.prototype.has = function(value) {
+  return this.set_.contains(value);
+};
+goog.exportProperty(lf.structs.SetPolyFill_.prototype, "has", lf.structs.SetPolyFill_.prototype.has);
+lf.structs.set.create = function(opt_iterable) {
+  return window.Set && window.Set.prototype.values && window.Set.prototype.forEach ? new window.Set(opt_iterable) : new lf.structs.SetPolyFill_(opt_iterable);
+};
+lf.structs.set.values = function(set) {
+  if (set instanceof lf.structs.SetPolyFill_) {
+    return set.set_.getValues();
+  }
+  var i = 0, array = Array(set.size);
+  set.forEach(function(v) {
+    array[i++] = v;
+  });
+  return array;
+};
+lf.structs.set.diff = function(set1, set2) {
+  if (set1 instanceof lf.structs.SetPolyFill_) {
+    var result = new lf.structs.SetPolyFill_;
+    result.set_ = set1.set_.difference(set2.set_);
+  } else {
+    result = lf.structs.set.create(), lf.structs.set.values(set1).forEach(function(v) {
+      set2.has(v) || result.add(v);
+    });
+  }
+  return result;
+};
+
 lf.backstore.Page = function(id, opt_payload) {
   this.id_ = id;
   this.payload_ = opt_payload || {};
 };
 lf.backstore.Page.BUNDLE_EXPONENT = 9;
 lf.backstore.Page.toPageIds = function(rowIds) {
-  var pageIds = new goog.structs.Set;
+  var pageIds = lf.structs.set.create();
   rowIds.forEach(function(id) {
     pageIds.add(lf.backstore.Page.toPageId(id));
   });
-  return pageIds.getValues();
+  return lf.structs.set.values(pageIds);
 };
 lf.backstore.Page.toPageId = function(rowId) {
   return rowId >> lf.backstore.Page.BUNDLE_EXPONENT;
@@ -3913,31 +3964,38 @@ lf.cache.InMemoryUpdater.prototype.updateIndicesForDiff_ = function(diff) {
   }, this);
 };
 lf.cache.InMemoryUpdater.prototype.updateTableIndicesForRow = function(table, modification) {
-  var indices = table.getIndices().map(function(indexSchema) {
-    return this.indexStore_.get(indexSchema.getNormalizedName());
-  }, this).concat([this.indexStore_.get(table.getRowIdIndexName())]);
-  indices.forEach(function(index) {
-    var keyNow = goog.isNull(modification[1]) ? void 0 : modification[1].keyOfIndex(index.getName()), keyThen = goog.isNull(modification[0]) ? void 0 : modification[0].keyOfIndex(index.getName());
-    if (!goog.isDef(keyThen) && goog.isDef(keyNow)) {
-      index.add(keyNow, modification[1].id());
-    } else {
-      if (goog.isDef(keyThen) && goog.isDef(keyNow)) {
-        if (goog.isNull(keyNow) || goog.isNull(keyThen)) {
-          if (keyNow == keyThen) {
-            return;
-          }
-        } else {
-          if (index.comparator().compare(keyThen, keyNow) == lf.index.Favor.TIE) {
-            return;
-          }
-        }
-        index.add(keyNow, modification[1].id());
-        index.remove(keyThen, modification[0].id());
-      } else {
-        goog.isDef(keyThen) && !goog.isDef(keyNow) && index.remove(keyThen, modification[0].id());
-      }
+  var indices = this.indexStore_.getTableIndices(table.getName()), updatedIndices = [];
+  indices.forEach(function(index$$0) {
+    try {
+      this.updateTableIndexForRow_(index$$0, modification), updatedIndices.push(index$$0);
+    } catch (e) {
+      throw updatedIndices.forEach(function(index) {
+        this.updateTableIndexForRow_(index, [modification[1], modification[0]]);
+      }, this), e;
     }
-  });
+  }, this);
+};
+lf.cache.InMemoryUpdater.prototype.updateTableIndexForRow_ = function(index, modification) {
+  var keyNow = goog.isNull(modification[1]) ? void 0 : modification[1].keyOfIndex(index.getName()), keyThen = goog.isNull(modification[0]) ? void 0 : modification[0].keyOfIndex(index.getName());
+  if (!goog.isDef(keyThen) && goog.isDef(keyNow)) {
+    index.add(keyNow, modification[1].id());
+  } else {
+    if (goog.isDef(keyThen) && goog.isDef(keyNow)) {
+      if (goog.isNull(keyNow) || goog.isNull(keyThen)) {
+        if (keyNow == keyThen) {
+          return;
+        }
+      } else {
+        if (index.comparator().compare(keyThen, keyNow) == lf.index.Favor.TIE) {
+          return;
+        }
+      }
+      index.add(keyNow, modification[1].id());
+      index.remove(keyThen, modification[0].id());
+    } else {
+      goog.isDef(keyThen) && !goog.isDef(keyNow) && index.remove(keyThen, modification[0].id());
+    }
+  }
 };
 
 lf.type = {};
@@ -4165,7 +4223,7 @@ lf.cache.TableDiff.prototype.isEmpty = function() {
 };
 
 lf.cache.Journal = function(global, scope) {
-  this.scope_ = new goog.structs.Map;
+  this.scope_ = new lf.structs.Map;
   scope.forEach(function(tableSchema) {
     this.scope_.set(tableSchema.getName(), tableSchema);
   }, this);
@@ -4174,13 +4232,13 @@ lf.cache.Journal = function(global, scope) {
   this.constraintChecker_ = new lf.cache.ConstraintChecker(global);
   this.inMemoryUpdater_ = new lf.cache.InMemoryUpdater(global);
   this.pendingRollback_ = this.terminated_ = !1;
-  this.tableDiffs_ = new goog.structs.Map;
+  this.tableDiffs_ = new lf.structs.Map;
 };
 lf.cache.Journal.prototype.getDiff = function() {
   return this.tableDiffs_;
 };
 lf.cache.Journal.prototype.getIndexDiff = function() {
-  var tableSchemas = this.tableDiffs_.getKeys().map(function(tableName) {
+  var tableSchemas = lf.structs.map.keys(this.tableDiffs_).map(function(tableName) {
     return this.scope_.get(tableName);
   }, this), indices = [];
   tableSchemas.forEach(function(tableSchema) {
@@ -4198,8 +4256,8 @@ lf.cache.Journal.prototype.getScope = function() {
   return this.scope_;
 };
 lf.cache.Journal.prototype.getIndexScope = function() {
-  var indexScope = [], tables = this.scope_.getValues();
-  tables.forEach(function(tableSchema) {
+  var indexScope = [];
+  this.scope_.forEach(function(tableSchema) {
     if (tableSchema.persistentIndex()) {
       var tableIndices = tableSchema.getIndices();
       tableIndices.forEach(function(indexSchema) {
@@ -4220,7 +4278,7 @@ lf.cache.Journal.prototype.insert = function(table, rows) {
   }
 };
 lf.cache.Journal.prototype.modifyRow_ = function(table, modification) {
-  var tableName = table.getName(), diff = this.tableDiffs_.get(tableName, null) || new lf.cache.TableDiff(tableName);
+  var tableName = table.getName(), diff = this.tableDiffs_.get(tableName) || new lf.cache.TableDiff(tableName);
   this.tableDiffs_.set(tableName, diff);
   try {
     this.inMemoryUpdater_.updateTableIndicesForRow(table, modification);
@@ -4266,7 +4324,7 @@ lf.cache.Journal.prototype.remove = function(table, rows) {
   }
 };
 lf.cache.Journal.prototype.checkDeferredConstraints = function() {
-  this.tableDiffs_.getValues().forEach(function(tableDiff) {
+  this.tableDiffs_.forEach(function(tableDiff) {
     var table = this.scope_.get(tableDiff.getName());
     this.constraintChecker_.checkForeignKeysForInsert(table, tableDiff.getAdded().getValues(), lf.ConstraintTiming.DEFERRABLE);
     this.constraintChecker_.checkForeignKeysForDelete(table, tableDiff.getDeleted().getValues(), lf.ConstraintTiming.DEFERRABLE);
@@ -4283,15 +4341,15 @@ lf.cache.Journal.prototype.assertJournalWritable_ = function() {
 };
 lf.cache.Journal.prototype.rollback = function() {
   goog.asserts.assert(!this.terminated_, "Attempted to rollback a terminated journal.");
-  var reverseDiffs = this.tableDiffs_.getValues().map(function(tableDiff) {
+  var reverseDiffs = lf.structs.map.values(this.tableDiffs_).map(function(tableDiff) {
     return tableDiff.getReverse();
-  }, this);
+  });
   this.inMemoryUpdater_.update(reverseDiffs);
   this.terminated_ = !0;
   this.pendingRollback_ = !1;
 };
 lf.cache.Journal.prototype.checkScope_ = function(tableSchema) {
-  if (!this.scope_.containsKey(tableSchema.getName())) {
+  if (!this.scope_.has(tableSchema.getName())) {
     throw new lf.Exception(106, tableSchema.getName());
   }
 };
@@ -4538,86 +4596,95 @@ lf.eval = {};
 lf.eval.Type = {BETWEEN:"between", EQ:"eq", GTE:"gte", GT:"gt", IN:"in", LTE:"lte", LT:"lt", MATCH:"match", NEQ:"neq"};
 lf.eval.Registry = function() {
   var numberOrIntegerEvalMap = lf.eval.buildNumberEvaluatorMap_();
-  this.evaluationMaps_ = new goog.structs.Map(lf.Type.BOOLEAN, lf.eval.buildBooleanEvaluatorMap_(), lf.Type.DATE_TIME, lf.eval.buildDateEvaluatorMap_(), lf.Type.NUMBER, numberOrIntegerEvalMap, lf.Type.INTEGER, numberOrIntegerEvalMap, lf.Type.STRING, lf.eval.buildStringEvaluatorMap_());
+  this.evalMaps_ = new lf.structs.Map;
+  this.evalMaps_.set(lf.Type.BOOLEAN, lf.eval.buildBooleanEvaluatorMap_());
+  this.evalMaps_.set(lf.Type.DATE_TIME, lf.eval.buildDateEvaluatorMap_());
+  this.evalMaps_.set(lf.Type.NUMBER, numberOrIntegerEvalMap);
+  this.evalMaps_.set(lf.Type.INTEGER, numberOrIntegerEvalMap);
+  this.evalMaps_.set(lf.Type.STRING, lf.eval.buildStringEvaluatorMap_());
 };
 goog.addSingletonGetter(lf.eval.Registry);
 lf.eval.Registry.prototype.getEvaluator = function(columnType, evaluatorType) {
-  var evaluationMap = this.evaluationMaps_.get(columnType, null);
+  var evaluationMap = this.evalMaps_.get(columnType) || null;
   goog.asserts.assert(!goog.isNull(evaluationMap), "Could not find evaluation map for " + columnType);
-  var evaluatorFn = evaluationMap.get(evaluatorType, null);
+  var evaluatorFn = evaluationMap.get(evaluatorType) || null;
   goog.asserts.assert(!goog.isNull(evaluatorFn), "Could not find evaluator for " + columnType + ", " + evaluatorType);
   return evaluatorFn;
 };
-lf.eval.buildNumberEvaluatorMap_ = function() {
-  return new goog.structs.Map(lf.eval.Type.BETWEEN, function(a, range) {
-    return a >= range[0] && a <= range[1];
-  }, lf.eval.Type.EQ, function(a, b) {
+lf.eval.buildBooleanEvaluatorMap_ = function() {
+  var map = new lf.structs.Map;
+  map.set(lf.eval.Type.EQ, function(a, b) {
     return a == b;
-  }, lf.eval.Type.GTE, function(a, b) {
-    return a >= b;
-  }, lf.eval.Type.GT, function(a, b) {
-    return a > b;
-  }, lf.eval.Type.IN, function(rowValue, values) {
-    return -1 != values.indexOf(rowValue);
-  }, lf.eval.Type.LTE, function(a, b) {
-    return a <= b;
-  }, lf.eval.Type.LT, function(a, b) {
-    return a < b;
-  }, lf.eval.Type.NEQ, function(a, b) {
+  });
+  map.set(lf.eval.Type.NEQ, function(a, b) {
     return a != b;
   });
+  return map;
+};
+lf.eval.buildCommonEvaluatorMap_ = function() {
+  var map = lf.eval.buildBooleanEvaluatorMap_();
+  map.set(lf.eval.Type.BETWEEN, function(a, range) {
+    return a >= range[0] && a <= range[1];
+  });
+  map.set(lf.eval.Type.GTE, function(a, b) {
+    return a >= b;
+  });
+  map.set(lf.eval.Type.GT, function(a, b) {
+    return a > b;
+  });
+  map.set(lf.eval.Type.IN, function(rowValue, values) {
+    return -1 != values.indexOf(rowValue);
+  });
+  map.set(lf.eval.Type.LTE, function(a, b) {
+    return a <= b;
+  });
+  map.set(lf.eval.Type.LT, function(a, b) {
+    return a < b;
+  });
+  return map;
+};
+lf.eval.buildNumberEvaluatorMap_ = function() {
+  return lf.eval.buildCommonEvaluatorMap_();
 };
 lf.eval.buildStringEvaluatorMap_ = function() {
-  return new goog.structs.Map(lf.eval.Type.BETWEEN, function(a, range) {
-    return a >= range[0] && a <= range[1];
-  }, lf.eval.Type.EQ, function(a, b) {
-    return a == b;
-  }, lf.eval.Type.GTE, function(a, b) {
-    return a >= b;
-  }, lf.eval.Type.GT, function(a, b) {
-    return a > b;
-  }, lf.eval.Type.IN, function(rowValue, values) {
-    return -1 != values.indexOf(rowValue);
-  }, lf.eval.Type.LTE, function(a, b) {
-    return a <= b;
-  }, lf.eval.Type.LT, function(a, b) {
-    return a < b;
-  }, lf.eval.Type.MATCH, function(value, regex) {
+  var map = lf.eval.buildCommonEvaluatorMap_();
+  map.set(lf.eval.Type.MATCH, function(value, regex) {
     var re = new RegExp(regex);
     return re.test(value);
-  }, lf.eval.Type.NEQ, function(a, b) {
-    return a != b;
   });
+  return map;
 };
 lf.eval.buildDateEvaluatorMap_ = function() {
-  return new goog.structs.Map(lf.eval.Type.BETWEEN, function(a, range) {
+  var map = new lf.structs.Map;
+  map.set(lf.eval.Type.BETWEEN, function(a, range) {
     return a.getTime() >= range[0].getTime() && a.getTime() <= range[1].getTime();
-  }, lf.eval.Type.EQ, function(a, b) {
+  });
+  map.set(lf.eval.Type.EQ, function(a, b) {
     var aTime = goog.isNull(a) ? -1 : a.getTime(), bTime = goog.isNull(b) ? -1 : b.getTime();
     return aTime == bTime;
-  }, lf.eval.Type.GTE, function(a, b) {
+  });
+  map.set(lf.eval.Type.GTE, function(a, b) {
     return a.getTime() >= b.getTime();
-  }, lf.eval.Type.GT, function(a, b) {
+  });
+  map.set(lf.eval.Type.GT, function(a, b) {
     return a.getTime() > b.getTime();
-  }, lf.eval.Type.IN, function(targetValue, values) {
+  });
+  map.set(lf.eval.Type.IN, function(targetValue, values) {
     return values.some(function(value) {
       return value.getTime() == targetValue.getTime();
     });
-  }, lf.eval.Type.LTE, function(a, b) {
+  });
+  map.set(lf.eval.Type.LTE, function(a, b) {
     return a.getTime() <= b.getTime();
-  }, lf.eval.Type.LT, function(a, b) {
+  });
+  map.set(lf.eval.Type.LT, function(a, b) {
     return a.getTime() < b.getTime();
-  }, lf.eval.Type.NEQ, function(a, b) {
+  });
+  map.set(lf.eval.Type.NEQ, function(a, b) {
     var aTime = goog.isNull(a) ? -1 : a.getTime(), bTime = goog.isNull(b) ? -1 : b.getTime();
     return aTime != bTime;
   });
-};
-lf.eval.buildBooleanEvaluatorMap_ = function() {
-  return new goog.structs.Map(lf.eval.Type.EQ, function(a, b) {
-    return a == b;
-  }, lf.eval.Type.NEQ, function(a, b) {
-    return a != b;
-  });
+  return map;
 };
 goog.structs.Node = function(key, value) {
   this.key_ = key;
@@ -5050,7 +5117,7 @@ lf.raw.BackStore = function() {
 lf.backstore.FirebaseRawBackStore = function(version, dbRef) {
   this.version_ = version;
   this.db_ = dbRef;
-  this.tableIds_ = new goog.structs.Map;
+  this.tableIds_ = new lf.structs.Map;
 };
 goog.exportSymbol("lf.backstore.FirebaseRawBackStore", lf.backstore.FirebaseRawBackStore);
 lf.backstore.FirebaseRawBackStore.prototype.getRawDBInstance = function() {
@@ -5086,7 +5153,7 @@ lf.backstore.FirebaseRawBackStore.prototype.init = function(schema) {
       this.tableIds_.set(t, tableIdMap[t]), tableIdMap[t] > maxTableId && (maxTableId = tableIdMap[t]);
     }
     schema.tables().forEach(function(table) {
-      this.tableIds_.containsKey(table.getName()) || (tableIdMap[table.getName()] = ++maxTableId);
+      this.tableIds_.has(table.getName()) || (tableIdMap[table.getName()] = ++maxTableId);
     }, this);
     var ref = this.db_.child("@table");
     return lf.backstore.FirebaseRawBackStore.setValue(ref, tableIdMap);
@@ -5117,7 +5184,7 @@ lf.backstore.FirebaseRawBackStore.prototype.dropTable = function(tableName) {
   return this.transform_(tableName, function() {
     return null;
   }).then(function() {
-    this.tableIds_.remove(tableName);
+    this.tableIds_.delete(tableName);
     return lf.backstore.FirebaseRawBackStore.setValue(this.db_.child("@table/" + tableName), null, !0);
   }.bind(this));
 };
@@ -5167,7 +5234,7 @@ lf.backstore.FirebaseRawBackStore.prototype.dumpTable_ = function(tableName) {
   return resolver.promise;
 };
 lf.backstore.FirebaseRawBackStore.prototype.dump = function() {
-  var contents = {}, promises = this.tableIds_.getKeys().map(function(tableName) {
+  var contents = {}, promises = lf.structs.map.keys(this.tableIds_).map(function(tableName) {
     return this.dumpTable_(tableName).then(function(rows) {
       contents[tableName] = rows;
     });
@@ -5187,15 +5254,15 @@ lf.backstore.FirebaseTx.prototype.getTable = function(name) {
   return this.db_.getTableInternal(name);
 };
 lf.backstore.FirebaseTx.prototype.commitInternal = function() {
-  var diffs = this.getJournal().getDiff(), numTableAffected = diffs.getCount();
+  var diffs = this.getJournal().getDiff(), numTableAffected = diffs.size;
   if (0 == numTableAffected) {
     this.resolver.resolve();
   } else {
     var rev = this.db_.getRevision() + 1;
     this.db_.setRevision(rev);
     var update = {"@rev":{R:rev}};
-    diffs.forEach(function(diff) {
-      var tid = this.db_.getTableId(diff.getName());
+    diffs.forEach(function(diff, tableName) {
+      var tid = this.db_.getTableId(tableName);
       diff.getAdded().forEach(function(row, rowId) {
         update[rowId] = {R:rev, T:tid, P:row.payload()};
       });
@@ -5211,7 +5278,7 @@ lf.backstore.FirebaseTx.prototype.commitInternal = function() {
         this.resolver.resolve();
       } else {
         this.db_.setRevision(rev - 1);
-        var promises = diffs.getValues().map(function(diff) {
+        var promises = lf.structs.map.values(diffs).map(function(diff) {
           return this.db_.reloadTable(diff.getName());
         }, this);
         goog.Promise.all(promises).then(this.resolver.reject.bind(this.resolver), this.resolver.reject.bind(this.resolver));
@@ -5268,10 +5335,10 @@ lf.backstore.MemoryTable.prototype.getMaxRowId = function() {
 lf.backstore.Firebase = function(schema, fb) {
   this.schema_ = schema;
   this.app_ = fb;
-  this.removedRows_ = new goog.structs.Map;
+  this.removedRows_ = new lf.structs.Map;
   this.revision_ = -1;
-  this.tables_ = new goog.structs.Map;
-  this.tableIds_ = new goog.structs.Map;
+  this.tables_ = new lf.structs.Map;
+  this.tableIds_ = new lf.structs.Map;
   this.changeHandler_ = null;
 };
 lf.backstore.Firebase.prototype.getRevision = function() {
@@ -5331,7 +5398,7 @@ lf.backstore.Firebase.prototype.listen_ = function() {
   this.change_.on("value", this.onChange_.bind(this));
 };
 lf.backstore.Firebase.prototype.initRowId_ = function() {
-  var maxRowId = this.tables_.getValues().map(function(table) {
+  var maxRowId = lf.structs.map.values(this.tables_).map(function(table) {
     return table.getMaxRowId();
   }).reduce(function(maxSoFar, cur) {
     return maxSoFar > cur ? maxSoFar : cur;
@@ -5339,8 +5406,8 @@ lf.backstore.Firebase.prototype.initRowId_ = function() {
   lf.Row.setNextId(maxRowId + 1);
 };
 lf.backstore.Firebase.prototype.onRemoved_ = function(snapshot) {
-  var row = snapshot.val(), set = this.removedRows_.get(row.T, null);
-  goog.isNull(set) && (set = new goog.structs.Set, this.removedRows_.set(row.T, set));
+  var row = snapshot.val(), set = this.removedRows_.get(row.T) || null;
+  goog.isNull(set) && (set = lf.structs.set.create([row.T]));
   set.add(parseInt(snapshot.key(), 10));
 };
 lf.backstore.Firebase.prototype.onChange_ = function(snapshot) {
@@ -5362,12 +5429,14 @@ lf.backstore.Firebase.prototype.onChange_ = function(snapshot) {
   }
 };
 lf.backstore.Firebase.prototype.generateDiff_ = function(snapshot) {
-  var removedIds = new goog.structs.Set, diffs = new goog.structs.Map;
+  var removedIds = lf.structs.set.create(), diffs = new lf.structs.Map;
   this.tableIds_.forEach(function(tid, tableName) {
     var table = this.tables_.get(tableName), diff = new lf.cache.TableDiff(tableName);
-    if (this.removedRows_.containsKey(tid)) {
-      var rowIds = this.removedRows_.get(tid).getValues();
-      removedIds.addAll(rowIds);
+    if (this.removedRows_.has(tid)) {
+      var rowIds = lf.structs.set.values(this.removedRows_.get(tid));
+      rowIds.forEach(function(rowId) {
+        removedIds.add(rowId);
+      });
       table.getSync(rowIds).forEach(function(row) {
         diff.delete(row);
       });
@@ -5377,13 +5446,13 @@ lf.backstore.Firebase.prototype.generateDiff_ = function(snapshot) {
   snapshot.forEach(function(child) {
     if ("@rev" != child.key()) {
       var rowId = parseInt(child.key(), 10);
-      if (!removedIds.contains(rowId)) {
+      if (!removedIds.has(rowId)) {
         var row = child.val(), diff = diffs.get(row.T), table = this.tables_.get(diff.getName());
-        table.getData().containsKey(rowId) ? diff.modify([table.getSync([rowId])[0], new lf.Row(rowId, row.P)]) : diff.add(new lf.Row(rowId, row.P));
+        table.getData().has(rowId) ? diff.modify([table.getSync([rowId])[0], new lf.Row(rowId, row.P)]) : diff.add(new lf.Row(rowId, row.P));
       }
     }
   }.bind(this));
-  return diffs.getValues().filter(function(diff) {
+  return lf.structs.map.values(diffs).filter(function(diff) {
     return !diff.isEmpty();
   });
 };
@@ -5421,7 +5490,7 @@ lf.backstore.Firebase.prototype.createTx = function(type, journal) {
   return new lf.backstore.FirebaseTx(this, type, journal);
 };
 lf.backstore.Firebase.prototype.getTableInternal = function(tableName) {
-  var table = this.tables_.get(tableName, null);
+  var table = this.tables_.get(tableName) || null;
   if (!goog.isNull(table)) {
     return table;
   }
@@ -5766,9 +5835,7 @@ lf.backstore.IndexedDB.prototype.createIndexTable_ = function(db, tx, indexName,
   }
 };
 lf.backstore.IndexedDB.prototype.createTx = function(type, journal) {
-  var scope = journal.getScope().getValues().map(function(table) {
-    return table.getName();
-  });
+  var scope = lf.structs.map.keys(journal.getScope());
   journal.getIndexScope().forEach(function(indexTableName) {
     scope.push(indexTableName);
   });
@@ -6325,66 +6392,13 @@ lf.backstore.WebSql.prototype.scanRowId_ = function() {
 lf.cache.Cache = function() {
 };
 
-lf.structs.set = {};
-lf.structs.SetPolyFill_ = function(opt_values) {
-  this.set_ = new goog.structs.Set(opt_values);
-  Object.defineProperty(this, "size", {get:function() {
-    return this.set_.getCount();
-  }});
-};
-lf.structs.SetPolyFill_.prototype.add = function(value) {
-  this.set_.add(value);
-};
-goog.exportProperty(lf.structs.SetPolyFill_.prototype, "add", lf.structs.SetPolyFill_.prototype.add);
-lf.structs.SetPolyFill_.prototype.clear = function() {
-  this.set_.clear();
-};
-goog.exportProperty(lf.structs.SetPolyFill_.prototype, "clear", lf.structs.SetPolyFill_.prototype.clear);
-lf.structs.SetPolyFill_.prototype.delete = function(value) {
-  return this.set_.remove(value);
-};
-goog.exportProperty(lf.structs.SetPolyFill_.prototype, "delete", lf.structs.SetPolyFill_.prototype.delete);
-lf.structs.SetPolyFill_.prototype.forEach = function(fn, opt_this) {
-  this.set_.getValues().forEach(fn, opt_this);
-};
-lf.structs.SetPolyFill_.prototype.has = function(value) {
-  return this.set_.contains(value);
-};
-goog.exportProperty(lf.structs.SetPolyFill_.prototype, "has", lf.structs.SetPolyFill_.prototype.has);
-lf.structs.Set = window.Set && window.Set.prototype.values && window.Set.prototype.forEach ? window.Set : lf.structs.SetPolyFill_;
-lf.structs.set.create_ = function() {
-  var constructorFn = window.Set && window.Set.prototype.values && window.Set.prototype.forEach ? window.Set : lf.structs.SetPolyFill_;
-  return new constructorFn;
-};
-lf.structs.set.values = function(set) {
-  if (set instanceof lf.structs.SetPolyFill_) {
-    return set.set_.getValues();
-  }
-  var i = 0, array = Array(set.size);
-  set.forEach(function(v) {
-    array[i++] = v;
-  });
-  return array;
-};
-lf.structs.set.diff = function(set1, set2) {
-  if (set1 instanceof lf.structs.SetPolyFill_) {
-    var result = new lf.structs.SetPolyFill_;
-    result.set_ = set1.set_.difference(set2.set_);
-  } else {
-    result = lf.structs.set.create_(), lf.structs.set.values(set1).forEach(function(v) {
-      set2.has(v) || result.add(v);
-    });
-  }
-  return result;
-};
-
 lf.cache.DefaultCache = function() {
   this.map_ = new lf.structs.Map;
   this.tableRows_ = new lf.structs.Map;
 };
 lf.cache.DefaultCache.prototype.getTableSet_ = function(tableName) {
   var set = this.tableRows_.get(tableName);
-  goog.isDef(set) || (set = new lf.structs.Set, this.tableRows_.set(tableName, set));
+  goog.isDef(set) || (set = lf.structs.set.create(), this.tableRows_.set(tableName, set));
   return set;
 };
 lf.cache.DefaultCache.prototype.set = function(tableName, rows) {
@@ -7028,9 +7042,6 @@ lf.index.SimpleComparator.prototype.isInRange = function(key, range) {
   var results = this.compareRange(key, range);
   return results[0] && results[1];
 };
-lf.index.SimpleComparator.prototype.getAllRange = function() {
-  return lf.index.SingleKeyRange.all();
-};
 lf.index.SimpleComparator.prototype.orderKeyRange = function(lhs, rhs) {
   return this.orderRange_(lhs, rhs);
 };
@@ -7098,11 +7109,6 @@ lf.index.MultiKeyComparator.prototype.isInRange = function(key, range) {
   }
   return isInRange;
 };
-lf.index.MultiKeyComparator.prototype.getAllRange = function() {
-  return this.comparators_.map(function(c) {
-    return c.getAllRange();
-  });
-};
 lf.index.MultiKeyComparator.prototype.sortKeyRanges = function(keyRanges) {
   for (var outputKeyRanges = keyRanges.filter(function(range) {
     return range.every(goog.isDefAndNotNull);
@@ -7142,7 +7148,7 @@ lf.index.MultiKeyComparator.prototype.rangeToKeys = function(keyRange) {
 
 lf.index.NullableIndex = function(index) {
   this.index_ = index;
-  this.nulls_ = new goog.structs.Set;
+  this.nulls_ = lf.structs.set.create();
   this.statsNull_ = new lf.index.Stats;
   this.stats_ = new lf.index.Stats;
 };
@@ -7156,10 +7162,10 @@ lf.index.NullableIndex.prototype.set = function(key, value) {
   goog.isNull(key) ? (this.nulls_.clear(), this.statsNull_.clear(), this.add(key, value)) : this.index_.set(key, value);
 };
 lf.index.NullableIndex.prototype.remove = function(key, opt_rowId) {
-  goog.isNull(key) ? opt_rowId ? (this.nulls_.remove(opt_rowId), this.statsNull_.remove(key, 1)) : (this.nulls_.clear(), this.statsNull_.clear()) : this.index_.remove(key, opt_rowId);
+  goog.isNull(key) ? opt_rowId ? (this.nulls_.delete(opt_rowId), this.statsNull_.remove(key, 1)) : (this.nulls_.clear(), this.statsNull_.clear()) : this.index_.remove(key, opt_rowId);
 };
 lf.index.NullableIndex.prototype.get = function(key) {
-  return goog.isNull(key) ? this.nulls_.getValues() : this.index_.get(key);
+  return goog.isNull(key) ? lf.structs.set.values(this.nulls_) : this.index_.get(key);
 };
 lf.index.NullableIndex.prototype.cost = function(opt_keyRange) {
   return this.index_.cost(opt_keyRange);
@@ -7170,14 +7176,14 @@ lf.index.NullableIndex.prototype.stats = function() {
 };
 lf.index.NullableIndex.prototype.getRange = function(opt_keyRanges, opt_reverseOrder, opt_limit, opt_skip) {
   var results = this.index_.getRange(opt_keyRanges, opt_reverseOrder, opt_limit, opt_skip);
-  return goog.isDefAndNotNull(opt_keyRanges) ? results : results.concat(this.nulls_.getValues());
+  return goog.isDefAndNotNull(opt_keyRanges) ? results : results.concat(lf.structs.set.values(this.nulls_));
 };
 lf.index.NullableIndex.prototype.clear = function() {
   this.nulls_.clear();
   this.index_.clear();
 };
 lf.index.NullableIndex.prototype.containsKey = function(key) {
-  return goog.isNull(key) ? !this.nulls_.isEmpty() : this.index_.containsKey(key);
+  return goog.isNull(key) ? 0 != this.nulls_.size : this.index_.containsKey(key);
 };
 lf.index.NullableIndex.prototype.min = function() {
   return this.index_.min();
@@ -7187,7 +7193,7 @@ lf.index.NullableIndex.prototype.max = function() {
 };
 lf.index.NullableIndex.NULL_ROW_ID_ = -2;
 lf.index.NullableIndex.prototype.serialize = function() {
-  var rows = [new lf.Row(lf.index.NullableIndex.NULL_ROW_ID_, this.nulls_.getValues())];
+  var rows = [new lf.Row(lf.index.NullableIndex.NULL_ROW_ID_, lf.structs.set.values(this.nulls_))];
   return rows.concat(this.index_.serialize());
 };
 lf.index.NullableIndex.prototype.comparator = function() {
@@ -7206,7 +7212,9 @@ lf.index.NullableIndex.deserialize = function(deserializeFn, rows) {
   var nulls = rows[index].payload(), newRows = rows.slice(0);
   newRows.splice(index, 1);
   var tree = deserializeFn(newRows), nullableIndex = new lf.index.NullableIndex(tree);
-  nullableIndex.nulls_.addAll(nulls);
+  nulls.forEach(function(rowId) {
+    nullableIndex.nulls_.add(rowId);
+  });
   return nullableIndex;
 };
 lf.index.NullableIndex.prototype.isUniqueKey = function() {
@@ -7215,7 +7223,7 @@ lf.index.NullableIndex.prototype.isUniqueKey = function() {
 
 lf.index.RowId = function(name) {
   this.name_ = name;
-  this.rows_ = new lf.structs.Set;
+  this.rows_ = lf.structs.set.create();
   this.comparator_ = new lf.index.SimpleComparator(lf.Order.ASC);
 };
 lf.index.RowId.ROW_ID = 0;
@@ -7286,7 +7294,9 @@ lf.index.RowId.prototype.isUniqueKey = function() {
   return !0;
 };
 lf.index.RowId.prototype.stats = function() {
-  throw new lf.Exception(300);
+  var stats = new lf.index.Stats;
+  stats.totalRows = this.rows_.size;
+  return stats;
 };
 
 lf.cache.Prefetcher = function(global) {
@@ -7336,10 +7346,10 @@ lf.cache.Prefetcher.prototype.reconstructPersistentIndex_ = function(indexSchema
     if (1 < serializedRows.length) {
       if (indexSchema.hasNullableColumn()) {
         var deserializeFn = lf.index.BTree.deserialize.bind(void 0, comparator, indexSchema.getNormalizedName(), indexSchema.isUnique), nullableIndex = lf.index.NullableIndex.deserialize(deserializeFn, serializedRows.slice(1));
-        this.indexStore_.set(nullableIndex);
+        this.indexStore_.set(indexSchema.tableName, nullableIndex);
       } else {
         var btreeIndex = lf.index.BTree.deserialize(comparator, indexSchema.getNormalizedName(), indexSchema.isUnique, serializedRows.slice(1));
-        this.indexStore_.set(btreeIndex);
+        this.indexStore_.set(indexSchema.tableName, btreeIndex);
       }
     }
   }, this));
@@ -7350,201 +7360,33 @@ lf.cache.Prefetcher.prototype.reconstructPersistentRowIdIndex_ = function(tableS
     goog.asserts.assert(serializedRows[0].payload().type == lf.index.IndexMetadata.Type.ROW_ID);
     if (1 < serializedRows.length) {
       var rowIdIndex = lf.index.RowId.deserialize(tableSchema.getRowIdIndexName(), serializedRows.slice(1));
-      this.indexStore_.set(rowIdIndex);
+      this.indexStore_.set(tableSchema.getName(), rowIdIndex);
     }
   }, this));
-};
-
-lf.index.AANode_ = function() {
-  this.level = 0;
-  this.left = this;
-  this.right = this;
-};
-lf.index.AANode_.create = function(key, value, nullNode) {
-  var node = new lf.index.AANode_;
-  node.level = 1;
-  node.left = nullNode;
-  node.right = nullNode;
-  node.key = key;
-  node.value = value;
-  return node;
-};
-lf.index.AATree = function(name, comparator) {
-  this.name_ = name;
-  this.nullNode_ = new lf.index.AANode_;
-  this.deleted_ = null;
-  this.root_ = this.nullNode_;
-  this.comparator_ = comparator;
-};
-lf.index.AATree.prototype.getName = function() {
-  return this.name_;
-};
-lf.index.AATree.prototype.skew_ = function(node) {
-  if (node.level == node.left.level) {
-    var left = node.left;
-    node.left = left.right;
-    left.right = node;
-    return left;
-  }
-  return node;
-};
-lf.index.AATree.prototype.split_ = function(node) {
-  if (node.right.right.level == node.level) {
-    var right = node.right;
-    node.right = right.left;
-    right.left = node;
-    right.level++;
-    return right;
-  }
-  return node;
-};
-lf.index.AATree.prototype.insert_ = function(node, key, value) {
-  if (node == this.nullNode_) {
-    return lf.index.AANode_.create(key, value, this.nullNode_);
-  }
-  var favor = this.comparator_.compare(key, node.key);
-  if (favor == lf.index.Favor.RHS) {
-    node.left = this.insert_(node.left, key, value);
-  } else {
-    if (favor == lf.index.Favor.LHS) {
-      node.right = this.insert_(node.right, key, value);
-    } else {
-      throw new lf.Exception(201);
-    }
-  }
-  var ret = this.skew_(node);
-  return ret = this.split_(ret);
-};
-lf.index.AATree.prototype.add = function(key, value) {
-  this.root_ = this.insert_(this.root_, key, value);
-};
-lf.index.AATree.prototype.set = function(key, value) {
-  var node = this.search_(this.root_, key);
-  null == node ? this.add(key, value) : node.value = value;
-};
-lf.index.AATree.prototype.delete_ = function(node, key) {
-  if (node == this.nullNode_) {
-    return this.nullNode_;
-  }
-  var favor = this.comparator_.compare(key, node.key);
-  favor == lf.index.Favor.RHS ? node.left = this.delete_(node.left, key) : (favor == lf.index.Favor.TIE && (this.deleted_ = node), node.right = this.delete_(node.right, key));
-  var ret = node;
-  if (null != this.deleted_) {
-    this.deleted_.key = node.key, this.deleted_.value = node.value, this.deleted_ = null, ret = ret.right;
-  } else {
-    if (ret.left.level < ret.level - 1 || ret.right.level < ret.level - 1) {
-      --ret.level, ret.right.level > ret.level && (ret.right.level = ret.level), ret = this.skew_(node), ret.right = this.skew_(ret.right), ret.right.right = this.skew_(ret.right.right), ret = this.split_(ret), ret.right = this.split_(ret.right);
-    }
-  }
-  return ret;
-};
-lf.index.AATree.prototype.remove = function(key) {
-  this.root_ = this.delete_(this.root_, key);
-};
-lf.index.AATree.prototype.search_ = function(node, key) {
-  if (node == this.nullNode_) {
-    return null;
-  }
-  var favor = this.comparator_.compare(key, node.key);
-  return favor == lf.index.Favor.TIE ? node : favor == lf.index.Favor.RHS ? this.search_(node.left, key) : this.search_(node.right, key);
-};
-lf.index.AATree.prototype.get = function(key) {
-  var node = this.search_(this.root_, key);
-  return null == node ? [] : [node.value];
-};
-lf.index.AATree.prototype.cost = function(opt_keyRange) {
-  return goog.isDefAndNotNull(opt_keyRange) ? this.getRange([opt_keyRange]).length : this.getRange().length;
-};
-lf.index.AATree.prototype.stats = function() {
-  throw new lf.Exception(300);
-};
-lf.index.AATree.prototype.getLeftMostNode_ = function() {
-  for (var node = this.root_;node.left != this.nullNode_;) {
-    node = node.left;
-  }
-  return node;
-};
-lf.index.AATree.prototype.getRightMostNode_ = function() {
-  for (var node = this.root_;node.right != this.nullNode_;) {
-    node = node.right;
-  }
-  return node;
-};
-lf.index.AATree.prototype.traverse_ = function(node, keyRange, results) {
-  if (node != this.nullNode_) {
-    var coverage = this.comparator_.compareRange(node.key, keyRange);
-    coverage[0] && (this.traverse_(node.left, keyRange, results), coverage[1] && results.push(node.value));
-    coverage[1] && this.traverse_(node.right, keyRange, results);
-  }
-};
-lf.index.AATree.prototype.getRange = function(opt_keyRanges, opt_reverseOrder, opt_limit, opt_skip) {
-  var sortedKeyRanges = goog.isDefAndNotNull(opt_keyRanges) ? this.comparator_.sortKeyRanges(opt_keyRanges) : [this.comparator_.getAllRange()], results = [];
-  sortedKeyRanges.forEach(function(range) {
-    this.traverse_(this.root_, range, results);
-  }, this);
-  return lf.index.slice(results, opt_reverseOrder, opt_limit, opt_skip);
-};
-lf.index.AATree.prototype.clear = function() {
-  this.root_ = this.nullNode_;
-};
-lf.index.AATree.prototype.containsKey = function(key) {
-  return null != this.search_(this.root_, key);
-};
-lf.index.AATree.prototype.min = function() {
-  return this.minMax_(goog.bind(this.comparator_.min, this.comparator_));
-};
-lf.index.AATree.prototype.max = function() {
-  return this.minMax_(goog.bind(this.comparator_.max, this.comparator_));
-};
-lf.index.AATree.prototype.minMax_ = function(compareFn) {
-  var leftMostNode = this.getLeftMostNode_(), rightMostNode = this.getRightMostNode_();
-  return goog.isDefAndNotNull(leftMostNode.key) || goog.isDefAndNotNull(rightMostNode.key) ? compareFn(leftMostNode.key, rightMostNode.key) == lf.index.Favor.LHS ? [leftMostNode.key, [leftMostNode.value]] : [rightMostNode.key, [rightMostNode.value]] : null;
-};
-lf.index.AATree.prototype.serialize = function() {
-  goog.asserts.fail("AATree index serialization is not supported.");
-  return [];
-};
-lf.index.AATree.prototype.comparator = function() {
-  return this.comparator_;
-};
-lf.index.AATree.prototype.dump_ = function(node, buffer) {
-  if (node != this.nullNode_) {
-    var left = node.left == this.nullNode_ ? 0 : node.left.key, right = node.right == this.nullNode_ ? 0 : node.right.key, val = "[" + node.key + "-" + left + "/" + right + "]";
-    buffer[node.level - 1].push(val);
-    this.dump_(node.left, buffer);
-    this.dump_(node.right, buffer);
-  }
-};
-lf.index.AATree.prototype.toString = function() {
-  for (var buffer = [], j = 0;j < this.root_.level;++j) {
-    buffer.push([]);
-  }
-  this.dump_(this.root_, buffer);
-  for (var result = "", i = buffer.length - 1;0 <= i;--i) {
-    result = result + buffer[i].join("") + "\n";
-  }
-  return result;
-};
-lf.index.AATree.prototype.isUniqueKey = function() {
-  return !0;
 };
 
 lf.index.IndexStore = function() {
 };
 
 lf.index.MemoryIndexStore = function() {
-  this.store_ = new goog.structs.Map;
+  this.store_ = new lf.structs.Map;
+  this.tableIndices_ = new lf.structs.Map;
 };
 lf.index.MemoryIndexStore.prototype.init = function(schema) {
   var tables = schema.tables();
   tables.forEach(function(table) {
+    var tableIndices = [];
+    this.tableIndices_.set(table.getName(), tableIndices);
     var rowIdIndexName = table.getRowIdIndexName(), rowIdIndex = this.get(rowIdIndexName);
     if (goog.isNull(rowIdIndex)) {
-      var index = new lf.index.RowId(rowIdIndexName);
-      this.store_.set(rowIdIndexName, index);
+      var index$$0 = new lf.index.RowId(rowIdIndexName);
+      tableIndices.push(index$$0);
+      this.store_.set(rowIdIndexName, index$$0);
     }
     table.getIndices().forEach(function(indexSchema) {
-      this.store_.set(indexSchema.getNormalizedName(), lf.index.MemoryIndexStore.createIndex_(indexSchema));
+      var index = lf.index.MemoryIndexStore.createIndex_(indexSchema);
+      tableIndices.push(index);
+      this.store_.set(indexSchema.getNormalizedName(), index);
     }, this);
   }, this);
   return goog.Promise.resolve();
@@ -7554,17 +7396,22 @@ lf.index.MemoryIndexStore.createIndex_ = function(indexSchema) {
   return indexSchema.hasNullableColumn() ? new lf.index.NullableIndex(index) : index;
 };
 lf.index.MemoryIndexStore.prototype.get = function(name) {
-  return this.store_.get(name, null);
+  return this.store_.get(name) || null;
 };
-lf.index.MemoryIndexStore.prototype.set = function(index) {
-  return this.store_.set(index.getName(), index);
+lf.index.MemoryIndexStore.prototype.set = function(tableName, index) {
+  var tableIndices = this.tableIndices_.get(tableName) || null;
+  goog.isNull(tableIndices) && (tableIndices = [], this.tableIndices_.set(tableName, tableIndices));
+  for (var existsAt = null, i = 0;i < tableIndices.length;i++) {
+    if (tableIndices[i].getName() == index.getName()) {
+      existsAt = i;
+      break;
+    }
+  }
+  !goog.isNull(existsAt) && 0 < tableIndices.length ? tableIndices.splice(existsAt, 1, index) : tableIndices.push(index);
+  this.store_.set(index.getName(), index);
 };
 lf.index.MemoryIndexStore.prototype.getTableIndices = function(tableName) {
-  var indices = [], prefix = tableName + ".";
-  this.store_.getKeys().forEach(function(key) {
-    0 == key.indexOf(prefix) && indices.push(this.store_.get(key));
-  }, this);
-  return indices;
+  return this.tableIndices_.get(tableName) || [];
 };
 
 lf.index.SingleKeyRangeSet = function(opt_ranges) {
@@ -8347,7 +8194,11 @@ lf.proc.AggregationStep.Calculator_ = function(relation, columns) {
 lf.proc.AggregationStep.Calculator_.prototype.calculate = function() {
   this.columns_.forEach(function(column) {
     for (var reverseColumnChain = column.getColumnChain().reverse(), i = 1;i < reverseColumnChain.length;i++) {
-      var currentColumn = reverseColumnChain[i], leafColumn = currentColumn.getColumnChain().slice(-1)[0], inputRelation = this.getInputRelationFor_(currentColumn), result = lf.proc.AggregationStep.Calculator_.evalAggregation_(currentColumn.aggregatorType, inputRelation, leafColumn);
+      var currentColumn = reverseColumnChain[i], leafColumn = currentColumn.getColumnChain().slice(-1)[0], inputRelation = this.getInputRelationFor_(currentColumn);
+      if (inputRelation.hasAggregationResult(currentColumn)) {
+        break;
+      }
+      var result = lf.proc.AggregationStep.Calculator_.evalAggregation_(currentColumn.aggregatorType, inputRelation, leafColumn);
       this.relation_.setAggregationResult(currentColumn, result);
     }
   }, this);
@@ -8378,7 +8229,8 @@ lf.proc.AggregationStep.Calculator_.evalAggregation_ = function(aggregatorType, 
       result = Calculator.sum_(relation, column);
       break;
     case lf.fn.Type.AVG:
-      0 < relation.entries.length && (result = Calculator.sum_(relation, column) / relation.entries.length);
+      var count = Calculator.count_(relation, column);
+      0 < count && (result = Calculator.sum_(relation, column) / count);
       break;
     case lf.fn.Type.GEOMEAN:
       result = Calculator.geomean_(relation, column);
@@ -8400,15 +8252,17 @@ lf.proc.AggregationStep.Calculator_.count_ = function(relation, column) {
   }, 0);
 };
 lf.proc.AggregationStep.Calculator_.sum_ = function(relation, column) {
-  return relation.entries.reduce(function(soFar, entry) {
-    return soFar + entry.getField(column);
-  }, 0);
+  return lf.proc.AggregationStep.Calculator_.reduce_(relation, column, function(soFar, value) {
+    return value + soFar;
+  });
 };
 lf.proc.AggregationStep.Calculator_.stddev_ = function(relation, column) {
-  var values = relation.entries.map(function(entry) {
-    return entry.getField(column);
+  var values = [];
+  relation.entries.forEach(function(entry) {
+    var value = entry.getField(column);
+    goog.isNull(value) || values.push(value);
   });
-  return goog.math.standardDeviation.apply(null, values);
+  return 0 == values.length ? null : goog.math.standardDeviation.apply(null, values);
 };
 lf.proc.AggregationStep.Calculator_.geomean_ = function(relation, column) {
   var nonZeroEntriesCount = 0, reduced = relation.entries.reduce(function(soFar, entry) {
@@ -8837,7 +8691,8 @@ lf.query.valueToSql_ = function(value, op, type, stripValueInfo) {
   return op == lf.eval.Type.BETWEEN ? lf.query.escapeSqlValue_(type, value[0]) + " AND " + lf.query.escapeSqlValue_(type, value[1]) : lf.query.escapeSqlValue_(type, value).toString();
 };
 lf.query.valuePredicateToSql_ = function(pred, stripValueInfo) {
-  return [pred.column.getNormalizedName(), lf.query.evaluatorToSql_(pred.evaluatorType), lf.query.valueToSql_(pred.value, pred.evaluatorType, pred.column.getType(), stripValueInfo)].join(" ");
+  var column = pred.column.getNormalizedName(), op = lf.query.evaluatorToSql_(pred.evaluatorType), value = lf.query.valueToSql_(pred.value, pred.evaluatorType, pred.column.getType(), stripValueInfo);
+  return "=" == op && "NULL" == value ? [column, "IS NULL"].join(" ") : "<>" == op && "NULL" == value ? [column, "IS NOT NULL"].join(" ") : [column, op, value].join(" ");
 };
 lf.query.combinedPredicateToSql_ = function(pred, stripValueInfo) {
   var children = pred.getChildren().map(function(childNode) {
@@ -9347,14 +9202,15 @@ lf.proc.LogicalPlanRewriter.prototype.generate = function() {
   return this.rootNode_;
 };
 
-lf.proc.DeleteLogicalPlanGenerator = function(query) {
+lf.proc.DeleteLogicalPlanGenerator = function(query, rewritePasses) {
   lf.proc.BaseLogicalPlanGenerator.call(this, query);
+  this.rewritePasses_ = rewritePasses;
 };
 goog.inherits(lf.proc.DeleteLogicalPlanGenerator, lf.proc.BaseLogicalPlanGenerator);
 lf.proc.DeleteLogicalPlanGenerator.prototype.generateInternal = function() {
   var deleteNode = new lf.proc.DeleteNode(this.query.from), selectNode = goog.isDefAndNotNull(this.query.where) ? new lf.proc.SelectNode(this.query.where.copy()) : null, tableAccessNode = new lf.proc.TableAccessNode(this.query.from);
   goog.isNull(selectNode) ? deleteNode.addChild(tableAccessNode) : (selectNode.addChild(tableAccessNode), deleteNode.addChild(selectNode));
-  var rewritePasses = [new lf.proc.AndPredicatePass], planRewriter = new lf.proc.LogicalPlanRewriter(deleteNode, this.query, rewritePasses);
+  var planRewriter = new lf.proc.LogicalPlanRewriter(deleteNode, this.query, this.rewritePasses_);
   return planRewriter.generate();
 };
 
@@ -9386,10 +9242,14 @@ lf.proc.PushDownSelectionsPass = function() {
   this.alreadyPushedDown_ = new goog.structs.Set;
 };
 goog.inherits(lf.proc.PushDownSelectionsPass, lf.proc.RewritePass);
+lf.proc.PushDownSelectionsPass.prototype.clear_ = function() {
+  this.alreadyPushedDown_.clear();
+};
 lf.proc.PushDownSelectionsPass.prototype.rewrite = function(rootNode) {
+  this.clear_();
   this.rootNode = rootNode;
   this.traverse_(this.rootNode);
-  this.alreadyPushedDown_.clear();
+  this.clear_();
   return this.rootNode;
 };
 lf.proc.PushDownSelectionsPass.prototype.traverse_ = function(node) {
@@ -9453,14 +9313,15 @@ lf.proc.PushDownSelectionsPass.prototype.shouldSwapWithChild_ = function(node) {
   return node.getChildAt(0) instanceof lf.proc.SelectNode;
 };
 
-lf.proc.SelectLogicalPlanGenerator = function(query) {
+lf.proc.SelectLogicalPlanGenerator = function(query, rewritePasses) {
   lf.proc.BaseLogicalPlanGenerator.call(this, query);
+  this.rewritePasses_ = rewritePasses;
   this.projectNode_ = this.limitNode_ = this.skipNode_ = this.orderByNode_ = this.aggregationNode_ = this.groupByNode_ = this.selectNode_ = this.crossProductNode_ = this.tableAccessNodes_ = null;
 };
 goog.inherits(lf.proc.SelectLogicalPlanGenerator, lf.proc.BaseLogicalPlanGenerator);
 lf.proc.SelectLogicalPlanGenerator.prototype.generateInternal = function() {
   this.generateNodes_();
-  var rootNode = this.connectNodes_(), rewritePasses = [new lf.proc.AndPredicatePass, new lf.proc.CrossProductPass, new lf.proc.PushDownSelectionsPass, new lf.proc.ImplicitJoinsPass], planRewriter = new lf.proc.LogicalPlanRewriter(rootNode, this.query, rewritePasses);
+  var rootNode = this.connectNodes_(), planRewriter = new lf.proc.LogicalPlanRewriter(rootNode, this.query, this.rewritePasses_);
   return planRewriter.generate();
 };
 lf.proc.SelectLogicalPlanGenerator.prototype.generateNodes_ = function() {
@@ -9521,6 +9382,8 @@ lf.proc.SelectLogicalPlanGenerator.prototype.generateProjectNode_ = function() {
 };
 
 lf.proc.LogicalPlanFactory = function() {
+  this.selectOptimizationPasses_ = [new lf.proc.AndPredicatePass, new lf.proc.CrossProductPass, new lf.proc.PushDownSelectionsPass, new lf.proc.ImplicitJoinsPass];
+  this.deleteOptimizationPasses_ = [new lf.proc.AndPredicatePass];
 };
 lf.proc.LogicalPlanFactory.prototype.create = function(query) {
   var generator = null;
@@ -9528,10 +9391,10 @@ lf.proc.LogicalPlanFactory.prototype.create = function(query) {
     generator = new lf.proc.InsertLogicalPlanGenerator(query);
   } else {
     if (query instanceof lf.query.DeleteContext) {
-      generator = new lf.proc.DeleteLogicalPlanGenerator(query);
+      generator = new lf.proc.DeleteLogicalPlanGenerator(query, this.deleteOptimizationPasses_);
     } else {
       if (query instanceof lf.query.SelectContext) {
-        generator = new lf.proc.SelectLogicalPlanGenerator(query);
+        generator = new lf.proc.SelectLogicalPlanGenerator(query, this.selectOptimizationPasses_);
       } else {
         if (query instanceof lf.query.UpdateContext) {
           generator = new lf.proc.UpdateLogicalPlanGenerator(query);
@@ -9559,6 +9422,62 @@ lf.proc.DeleteStep.prototype.execInternal = function(journal, relations) {
   });
   journal.remove(this.table_, rows);
   return [lf.proc.Relation.createEmpty()];
+};
+
+lf.proc.GetRowCountStep = function(global, table) {
+  lf.proc.PhysicalQueryPlanNode.call(this, 0, lf.proc.PhysicalQueryPlanNode.ExecType.NO_CHILD);
+  this.table = table;
+  this.indexStore_ = global.getService(lf.service.INDEX_STORE);
+};
+goog.inherits(lf.proc.GetRowCountStep, lf.proc.PhysicalQueryPlanNode);
+lf.proc.GetRowCountStep.prototype.toString = function() {
+  return "get_row_count(" + this.table.getName() + ")";
+};
+lf.proc.GetRowCountStep.prototype.execInternal = function() {
+  var rowIdIndex = this.indexStore_.get(this.table.getRowIdIndexName()), relation = new lf.proc.Relation([], [this.table.getName()]);
+  relation.setAggregationResult(lf.fn.count(), rowIdIndex.stats().totalRows);
+  return [relation];
+};
+
+lf.proc.TableAccessFullStep = function(global, table) {
+  lf.proc.PhysicalQueryPlanNode.call(this, 0, lf.proc.PhysicalQueryPlanNode.ExecType.NO_CHILD);
+  this.cache_ = global.getService(lf.service.CACHE);
+  this.indexStore_ = global.getService(lf.service.INDEX_STORE);
+  this.table = table;
+};
+goog.inherits(lf.proc.TableAccessFullStep, lf.proc.PhysicalQueryPlanNode);
+lf.proc.TableAccessFullStep.prototype.toString = function() {
+  var out = "table_access(" + this.table.getName();
+  goog.isNull(this.table.getAlias()) || (out += " as " + this.table.getAlias());
+  return out += ")";
+};
+lf.proc.TableAccessFullStep.prototype.execInternal = function() {
+  var rowIds = this.indexStore_.get(this.table.getRowIdIndexName()).getRange();
+  return [lf.proc.Relation.fromRows(this.cache_.get(rowIds), [this.table.getEffectiveName()])];
+};
+
+lf.proc.GetRowCountPass = function(global) {
+  this.global_ = global;
+};
+goog.inherits(lf.proc.GetRowCountPass, lf.proc.RewritePass);
+lf.proc.GetRowCountPass.prototype.rewrite = function(rootNode, queryContext) {
+  this.rootNode = rootNode;
+  if (!this.canOptimize_(queryContext)) {
+    return rootNode;
+  }
+  var tableAccessFullStep = lf.tree.find(rootNode, function(node) {
+    return node instanceof lf.proc.TableAccessFullStep;
+  })[0], getRowCountStep = new lf.proc.GetRowCountStep(this.global_, tableAccessFullStep.table);
+  lf.tree.replaceNodeWithChain(tableAccessFullStep, getRowCountStep, getRowCountStep);
+  return this.rootNode;
+};
+lf.proc.GetRowCountPass.prototype.canOptimize_ = function(queryContext) {
+  var isCandidate = 1 == queryContext.columns.length && 1 == queryContext.from.length && !goog.isDefAndNotNull(queryContext.where) && !goog.isDefAndNotNull(queryContext.limit) && !goog.isDefAndNotNull(queryContext.skip) && !goog.isDefAndNotNull(queryContext.groupBy);
+  if (isCandidate) {
+    var column = queryContext.columns[0];
+    return column instanceof lf.fn.AggregatedColumn && column.aggregatorType == lf.fn.Type.COUNT && column.child instanceof lf.fn.StarColumn;
+  }
+  return !1;
 };
 
 lf.proc.GroupByStep = function(groupByColumns) {
@@ -9796,23 +9715,6 @@ lf.proc.TableAccessByRowIdStep.prototype.toString = function() {
 };
 lf.proc.TableAccessByRowIdStep.prototype.execInternal = function(journal, relations) {
   return [lf.proc.Relation.fromRows(this.cache_.get(relations[0].getRowIds()), [this.table_.getEffectiveName()])];
-};
-
-lf.proc.TableAccessFullStep = function(global, table) {
-  lf.proc.PhysicalQueryPlanNode.call(this, 0, lf.proc.PhysicalQueryPlanNode.ExecType.NO_CHILD);
-  this.cache_ = global.getService(lf.service.CACHE);
-  this.indexStore_ = global.getService(lf.service.INDEX_STORE);
-  this.table = table;
-};
-goog.inherits(lf.proc.TableAccessFullStep, lf.proc.PhysicalQueryPlanNode);
-lf.proc.TableAccessFullStep.prototype.toString = function() {
-  var out = "table_access(" + this.table.getName();
-  goog.isNull(this.table.getAlias()) || (out += " as " + this.table.getAlias());
-  return out += ")";
-};
-lf.proc.TableAccessFullStep.prototype.execInternal = function() {
-  var rowIds = this.indexStore_.get(this.table.getRowIdIndexName()).getRange();
-  return [lf.proc.Relation.fromRows(this.cache_.get(rowIds), [this.table.getEffectiveName()])];
 };
 
 lf.proc.IndexRangeScanPass = function(global) {
@@ -10226,6 +10128,8 @@ lf.proc.UpdateStep.prototype.execInternal = function(journal, relations) {
 
 lf.proc.PhysicalPlanFactory = function(global) {
   this.global_ = global;
+  this.selectOptimizationPasses_ = [new lf.proc.IndexRangeScanPass(this.global_), new lf.proc.OrderByIndexPass(this.global_), new lf.proc.LimitSkipByIndexPass, new lf.proc.GetRowCountPass(this.global_)];
+  this.deleteOptimizationPasses_ = [new lf.proc.IndexRangeScanPass(this.global_)];
 };
 lf.proc.PhysicalPlanFactory.prototype.create = function(logicalQueryPlan, queryContext) {
   var logicalQueryPlanRoot = logicalQueryPlan.getRoot();
@@ -10233,10 +10137,10 @@ lf.proc.PhysicalPlanFactory.prototype.create = function(logicalQueryPlan, queryC
     return this.createPlan_(logicalQueryPlan, queryContext);
   }
   if (logicalQueryPlanRoot instanceof lf.proc.ProjectNode || logicalQueryPlanRoot instanceof lf.proc.LimitNode || logicalQueryPlanRoot instanceof lf.proc.SkipNode) {
-    return this.createPlan_(logicalQueryPlan, queryContext, [new lf.proc.IndexRangeScanPass(this.global_), new lf.proc.OrderByIndexPass(this.global_), new lf.proc.LimitSkipByIndexPass]);
+    return this.createPlan_(logicalQueryPlan, queryContext, this.selectOptimizationPasses_);
   }
   if (logicalQueryPlanRoot instanceof lf.proc.DeleteNode || logicalQueryPlanRoot instanceof lf.proc.UpdateNode) {
-    return this.createPlan_(logicalQueryPlan, queryContext, [new lf.proc.IndexRangeScanPass(this.global_)]);
+    return this.createPlan_(logicalQueryPlan, queryContext, this.deleteOptimizationPasses_);
   }
   throw new lf.Exception(8);
 };
@@ -10468,64 +10372,64 @@ lf.DiffCalculator.createChangeRecord_ = function(index, removed, addedCount, obj
 };
 
 lf.ObserverRegistry = function() {
-  this.entries_ = new goog.structs.Map;
+  this.entries_ = new lf.structs.Map;
 };
 lf.ObserverRegistry.prototype.getQueryId_ = function(query) {
   return goog.getUid(query).toString();
 };
 lf.ObserverRegistry.prototype.addObserver = function(rawBuilder, callback) {
-  var builder = rawBuilder, queryId = this.getQueryId_(builder.getObservableQuery()), entry = this.entries_.get(queryId, null);
+  var builder = rawBuilder, queryId = this.getQueryId_(builder.getObservableQuery()), entry = this.entries_.get(queryId) || null;
   goog.isNull(entry) && (entry = new lf.ObserverRegistry.Entry_(builder), this.entries_.set(queryId, entry));
   entry.addObserver(callback);
 };
 lf.ObserverRegistry.prototype.removeObserver = function(builder, callback) {
-  var query = builder.getObservableQuery(), queryId = this.getQueryId_(query), entry = this.entries_.get(queryId, null);
+  var query = builder.getObservableQuery(), queryId = this.getQueryId_(query), entry = this.entries_.get(queryId) || null;
   goog.asserts.assert(goog.isDefAndNotNull(entry), "Attempted to unobserve a query that was not observed.");
   var didRemove = entry.removeObserver(callback);
   goog.asserts.assert(didRemove, "removeObserver: Inconsistent state detected.");
-  entry.hasObservers() || this.entries_.remove(queryId);
+  entry.hasObservers() || this.entries_.delete(queryId);
 };
 lf.ObserverRegistry.prototype.getTaskItemsForTables = function(tables) {
-  var tableSet = new goog.structs.Set;
+  var tableSet = lf.structs.set.create();
   tables.forEach(function(table) {
     tableSet.add(table.getName());
   });
   var items = [];
-  this.entries_.getValues().forEach(function(entry) {
+  this.entries_.forEach(function(entry) {
     var item = entry.getTaskItem(), refersToTables = item.context.from.some(function(table) {
-      return tableSet.contains(table.getName());
+      return tableSet.has(table.getName());
     });
     refersToTables && items.push(item);
   });
   return items;
 };
 lf.ObserverRegistry.prototype.updateResultsForQuery = function(query, results) {
-  var queryId = this.getQueryId_(goog.isDefAndNotNull(query.clonedFrom) ? query.clonedFrom : query), entry = this.entries_.get(queryId, null);
+  var queryId = this.getQueryId_(goog.isDefAndNotNull(query.clonedFrom) ? query.clonedFrom : query), entry = this.entries_.get(queryId) || null;
   return goog.isNull(entry) ? !1 : (entry.updateResults(results), !0);
 };
 lf.ObserverRegistry.Entry_ = function(builder) {
   this.builder_ = builder;
-  this.observers_ = new goog.structs.Set;
+  this.observers_ = lf.structs.set.create();
   this.observable_ = [];
   this.lastResults_ = null;
   this.diffCalculator_ = new lf.DiffCalculator(builder.getObservableQuery(), this.observable_);
 };
 lf.ObserverRegistry.Entry_.prototype.addObserver = function(callback) {
-  this.observers_.contains(callback) ? goog.asserts.fail("Attempted to register observer twice.") : this.observers_.add(callback);
+  this.observers_.has(callback) ? goog.asserts.fail("Attempted to register observer twice.") : this.observers_.add(callback);
 };
 lf.ObserverRegistry.Entry_.prototype.removeObserver = function(callback) {
-  return this.observers_.remove(callback);
+  return this.observers_.delete(callback);
 };
 lf.ObserverRegistry.Entry_.prototype.getTaskItem = function() {
   return this.builder_.getObservableTaskItem();
 };
 lf.ObserverRegistry.Entry_.prototype.hasObservers = function() {
-  return 0 < this.observers_.getCount();
+  return 0 < this.observers_.size;
 };
 lf.ObserverRegistry.Entry_.prototype.updateResults = function(newResults) {
   var changeRecords = this.diffCalculator_.applyDiff(this.lastResults_, newResults);
   this.lastResults_ = newResults;
-  0 < changeRecords.length && this.observers_.getValues().forEach(function(observerFn) {
+  0 < changeRecords.length && this.observers_.forEach(function(observerFn) {
     observerFn(changeRecords);
   });
 };
@@ -10896,7 +10800,7 @@ lf.schema.BaseColumn.prototype.as = function(name) {
 goog.exportProperty(lf.schema.BaseColumn.prototype, "as", lf.schema.BaseColumn.prototype.as);
 
 lf.Global = function() {
-  this.services_ = new goog.structs.Map;
+  this.services_ = new lf.structs.Map;
 };
 lf.Global.get = function() {
   lf.Global.instance_ || (lf.Global.instance_ = new lf.Global);
@@ -10912,15 +10816,15 @@ lf.Global.prototype.registerService = function(serviceId, service) {
 };
 goog.exportProperty(lf.Global.prototype, "registerService", lf.Global.prototype.registerService);
 lf.Global.prototype.getService = function(serviceId) {
-  var service = this.services_.get(serviceId.toString(), null);
-  if (null == service) {
+  var service = this.services_.get(serviceId.toString()) || null;
+  if (goog.isNull(service)) {
     throw new lf.Exception(7, serviceId.toString());
   }
   return service;
 };
 goog.exportProperty(lf.Global.prototype, "getService", lf.Global.prototype.getService);
 lf.Global.prototype.isRegistered = function(serviceId) {
-  return this.services_.containsKey(serviceId.toString());
+  return this.services_.has(serviceId.toString());
 };
 goog.exportProperty(lf.Global.prototype, "isRegistered", lf.Global.prototype.isRegistered);
 
@@ -10935,14 +10839,14 @@ lf.schema.Info = function(dbSchema) {
 };
 lf.schema.Info.prototype.init_ = function() {
   this.schema_.tables().forEach(function(table) {
-    var parents = new lf.structs.Set;
+    var parents = lf.structs.set.create();
     table.getConstraint().getForeignKeys().forEach(function(fkSpec) {
       var parentRefs = this.referringFk_.get(fkSpec.parentTable) || [];
       parentRefs.push(fkSpec);
       this.referringFk_.set(fkSpec.parentTable, parentRefs);
       parents.add(this.schema_.table(fkSpec.parentTable));
       var childOfParent = this.children_.get(fkSpec.parentTable);
-      childOfParent || (childOfParent = new lf.structs.Set);
+      childOfParent || (childOfParent = lf.structs.set.create());
       childOfParent.add(table);
       this.children_.set(fkSpec.parentTable, childOfParent);
       this.colParent_.set(table.getName() + "." + fkSpec.childColumn, fkSpec.parentTable);
@@ -10964,7 +10868,7 @@ lf.schema.Info.prototype.getParentTables = function(tableName) {
   return this.expandScope_(tableName, this.parents_);
 };
 lf.schema.Info.prototype.getParentTablesByColumns = function(colNames) {
-  var tableNames = new lf.structs.Set;
+  var tableNames = lf.structs.set.create();
   colNames.forEach(function(col) {
     var table = this.colParent_.get(col);
     table && tableNames.add(table);
@@ -10978,7 +10882,7 @@ lf.schema.Info.prototype.getChildTables = function(tableName) {
   return this.expandScope_(tableName, this.children_);
 };
 lf.schema.Info.prototype.getChildTablesByColumns = function(colNames) {
-  var tableNames = new lf.structs.Set;
+  var tableNames = lf.structs.set.create();
   colNames.forEach(function(col) {
     var children = this.colChild_.get(col);
     children && children.forEach(function(child) {
@@ -11026,9 +10930,9 @@ lf.schema.TableBuilder = function(tableName) {
   this.checkNamingRules_(tableName);
   this.name_ = tableName;
   this.columns_ = new lf.structs.Map;
-  this.uniqueColumns_ = new lf.structs.Set;
-  this.uniqueIndices_ = new lf.structs.Set;
-  this.nullable_ = new lf.structs.Set;
+  this.uniqueColumns_ = lf.structs.set.create();
+  this.uniqueIndices_ = lf.structs.set.create();
+  this.nullable_ = lf.structs.set.create();
   this.pkName_ = null;
   this.indices_ = new lf.structs.Map;
   this.persistentIndex_ = !1;
@@ -11040,7 +10944,7 @@ lf.schema.TableBuilder.IndexedColumn_ = function(raw) {
   this.order = raw.order;
   this.autoIncrement = raw.autoIncrement;
 };
-lf.schema.TableBuilder.NULLABLE_TYPES_BY_DEFAULT = new lf.structs.Set([lf.Type.ARRAY_BUFFER, lf.Type.OBJECT]);
+lf.schema.TableBuilder.NULLABLE_TYPES_BY_DEFAULT = lf.structs.set.create([lf.Type.ARRAY_BUFFER, lf.Type.OBJECT]);
 lf.schema.TableBuilder.toPascal_ = function(name) {
   return name[0].toUpperCase() + name.substring(1);
 };
@@ -11164,7 +11068,7 @@ lf.schema.TableBuilder.prototype.addNullable = function(columns) {
 goog.exportProperty(lf.schema.TableBuilder.prototype, "addNullable", lf.schema.TableBuilder.prototype.addNullable);
 lf.schema.TableBuilder.prototype.checkNullableColumns_ = function(columns) {
   lf.structs.map.keys(this.indices_).forEach(function(indexName) {
-    var indexedColumnNames = new lf.structs.Set;
+    var indexedColumnNames = lf.structs.set.create();
     this.indices_.get(indexName).forEach(function(indexedColumn) {
       indexedColumnNames.add(indexedColumn.name);
     });
@@ -11328,7 +11232,7 @@ lf.schema.TableBuilder.prototype.generateRowClass_ = function(columns$$0, indice
 
 lf.schema.Builder = function(dbName, dbVersion) {
   this.schema_ = new lf.schema.DatabaseSchema(dbName, dbVersion);
-  this.tableBuilders_ = new goog.structs.Map;
+  this.tableBuilders_ = new lf.structs.Map;
   this.finalized_ = !1;
 };
 goog.exportSymbol("lf.schema.Builder", lf.schema.Builder);
@@ -11336,7 +11240,7 @@ lf.schema.Builder.prototype.checkForeignKeyValidity_ = function(builder) {
   var fkSpecArray = builder.getFkSpecs();
   fkSpecArray.forEach(function(specs) {
     var parentTableName = specs.parentTable;
-    if (!this.tableBuilders_.containsKey(parentTableName)) {
+    if (!this.tableBuilders_.has(parentTableName)) {
       throw new lf.Exception(536, specs.name);
     }
     var table = this.tableBuilders_.get(parentTableName), parentSchema = table.getSchema(), parentColName = specs.parentColumn;
@@ -11364,10 +11268,10 @@ lf.schema.Builder.prototype.checkForeignKeyChain_ = function(builder) {
   }, this);
 };
 lf.schema.Builder.prototype.finalize_ = function() {
-  this.finalized_ || (this.tableBuilders_.getValues().forEach(function(builder) {
+  this.finalized_ || (this.tableBuilders_.forEach(function(builder) {
     this.checkForeignKeyValidity_(builder);
     this.schema_.setTable(builder.getSchema());
-  }, this), this.tableBuilders_.getValues().forEach(this.checkForeignKeyChain_, this), this.checkFkCycle_(), this.tableBuilders_.clear(), this.finalized_ = !0);
+  }, this), lf.structs.map.values(this.tableBuilders_).forEach(this.checkForeignKeyChain_, this), this.checkFkCycle_(), this.tableBuilders_.clear(), this.finalized_ = !0);
 };
 lf.schema.Builder.prototype.checkCycleUtil_ = function(graphNode, nodeMap) {
   graphNode.visited || (graphNode.visited = !0, graphNode.onStack = !0, graphNode.edges.forEach(function(edge) {
@@ -11384,7 +11288,7 @@ lf.schema.Builder.prototype.checkCycleUtil_ = function(graphNode, nodeMap) {
 };
 lf.schema.Builder.prototype.checkFkCycle_ = function() {
   var nodeMap = new lf.structs.Map;
-  this.schema_.tables_.getKeys().forEach(function(tableName) {
+  this.schema_.tables_.forEach(function(table, tableName) {
     nodeMap.set(tableName, new lf.schema.GraphNode_(tableName));
   }, this);
   this.tableBuilders_.forEach(function(builder, tableName) {
@@ -11399,7 +11303,7 @@ lf.schema.Builder.prototype.checkFkCycle_ = function() {
 };
 lf.schema.GraphNode_ = function(tableName) {
   this.onStack = this.visited = !1;
-  this.edges = new lf.structs.Set;
+  this.edges = lf.structs.set.create();
   this.tableName = tableName;
 };
 lf.schema.Builder.prototype.getSchema = function() {
@@ -11421,7 +11325,7 @@ lf.schema.Builder.prototype.connect = function(opt_options) {
 };
 goog.exportProperty(lf.schema.Builder.prototype, "connect", lf.schema.Builder.prototype.connect);
 lf.schema.Builder.prototype.createTable = function(tableName) {
-  if (this.tableBuilders_.containsKey(tableName)) {
+  if (this.tableBuilders_.has(tableName)) {
     throw new lf.Exception(503, tableName);
   }
   if (this.finalized_) {
@@ -11442,7 +11346,7 @@ goog.exportProperty(lf.schema.Builder.prototype, "setPragma", lf.schema.Builder.
 lf.schema.DatabaseSchema = function(name, version) {
   this.name_ = name;
   this.version_ = version;
-  this.tables_ = new goog.structs.Map;
+  this.tables_ = new lf.structs.Map;
   this.pragma_ = {enableBundledMode:!1};
 };
 goog.exportSymbol("lf.schema.DatabaseSchema", lf.schema.DatabaseSchema);
@@ -11455,11 +11359,11 @@ lf.schema.DatabaseSchema.prototype.version = function() {
 };
 goog.exportProperty(lf.schema.DatabaseSchema.prototype, "version", lf.schema.DatabaseSchema.prototype.version);
 lf.schema.DatabaseSchema.prototype.tables = function() {
-  return this.tables_.getValues();
+  return lf.structs.map.values(this.tables_);
 };
 goog.exportProperty(lf.schema.DatabaseSchema.prototype, "tables", lf.schema.DatabaseSchema.prototype.tables);
 lf.schema.DatabaseSchema.prototype.table = function(tableName) {
-  if (!this.tables_.containsKey(tableName)) {
+  if (!this.tables_.has(tableName)) {
     throw new lf.Exception(101, tableName);
   }
   return this.tables_.get(tableName);
