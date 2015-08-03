@@ -27,6 +27,8 @@ goog.require('lf.cache.Journal');
 goog.require('lf.index.MemoryIndexStore');
 goog.require('lf.index.RowId');
 goog.require('lf.service');
+goog.require('lf.structs.map');
+goog.require('lf.structs.set');
 goog.require('lf.testing.getSchemaBuilder');
 
 
@@ -84,6 +86,15 @@ function getFirebaseRef() {
   });
 
   return resolver.promise;
+}
+
+
+/**
+ * @param {!Array<!lf.schema.Table>} tables
+ * @return {!lf.cache.Journal}
+ */
+function createJournal(tables) {
+  return new lf.cache.Journal(global, lf.structs.set.create(tables));
 }
 
 
@@ -187,30 +198,30 @@ function testSCUD() {
     });
   };
 
-  var journal = new lf.cache.Journal(global, [t2]);
+  var journal = createJournal([t2]);
   journal.insertOrReplace(t2, [row0, row1]);
   var tx = db.createTx(lf.TransactionType.READ_WRITE, journal);
   tx.commit().then(function() {
     checkRows([row0, row1]);
-    journal = new lf.cache.Journal(global, [t2]);
+    journal = createJournal([t2]);
     journal.update(t2, [new lf.Row(2, CONTENTS2)]);
     tx = db.createTx(lf.TransactionType.READ_WRITE, journal);
     return tx.commit();
   }).then(function() {
     checkRows([row0, row2]);
-    journal = new lf.cache.Journal(global, [t2]);
+    journal = createJournal([t2]);
     journal.remove(t2, [row0]);
     tx = db.createTx(lf.TransactionType.READ_WRITE, journal);
     return tx.commit();
   }).then(function() {
     checkRows([row2]);
-    journal = new lf.cache.Journal(global, [t2]);
+    journal = createJournal([t2]);
     journal.insert(t2, [row0]);
     tx = db.createTx(lf.TransactionType.READ_WRITE, journal);
     return tx.commit();
   }).then(function() {
     checkRows([row0, row2]);
-    journal = new lf.cache.Journal(global, [t2]);
+    journal = createJournal([t2]);
     journal.remove(t2, [row0, row2]);
     tx = db.createTx(lf.TransactionType.READ_WRITE, journal);
     return tx.commit();
@@ -266,9 +277,9 @@ function testExternalChange() {
     var handler1 = function(diffs) {
       assertEquals(1, diffs.length);
       assertEquals('tableC', diffs[0].getName());
-      assertEquals(2, diffs[0].getAdded().getCount());
-      assertEquals(0, diffs[0].getModified().getCount());
-      assertEquals(0, diffs[0].getDeleted().getCount());
+      assertEquals(2, diffs[0].getAdded().size);
+      assertEquals(0, diffs[0].getModified().size);
+      assertEquals(0, diffs[0].getDeleted().size);
       assertObjectEquals(CONTENTS0, diffs[0].getAdded().get(1).payload());
       assertObjectEquals(CONTENTS1, diffs[0].getAdded().get(2).payload());
       resolver.resolve();
@@ -291,9 +302,9 @@ function testExternalChange() {
     var handler2 = function(diffs) {
       assertEquals(1, diffs.length);
       assertEquals('tableC', diffs[0].getName());
-      assertEquals(0, diffs[0].getAdded().getCount());
-      assertEquals(1, diffs[0].getModified().getCount());
-      assertEquals(0, diffs[0].getDeleted().getCount());
+      assertEquals(0, diffs[0].getAdded().size);
+      assertEquals(1, diffs[0].getModified().size);
+      assertEquals(0, diffs[0].getDeleted().size);
       assertObjectEquals(CONTENTS2, diffs[0].getModified().get(2)[1].payload());
       resolver.resolve();
     };
@@ -314,10 +325,10 @@ function testExternalChange() {
     var handler3 = function(diffs) {
       assertEquals(1, diffs.length);
       assertEquals('tableC', diffs[0].getName());
-      assertEquals(0, diffs[0].getAdded().getCount());
-      assertEquals(0, diffs[0].getModified().getCount());
-      assertEquals(2, diffs[0].getDeleted().getCount());
-      assertArrayEquals([1, 2], diffs[0].getDeleted().getKeys());
+      assertEquals(0, diffs[0].getAdded().size);
+      assertEquals(0, diffs[0].getModified().size);
+      assertEquals(2, diffs[0].getDeleted().size);
+      assertArrayEquals([1, 2], lf.structs.map.keys(diffs[0].getDeleted()));
       resolver.resolve();
     };
 

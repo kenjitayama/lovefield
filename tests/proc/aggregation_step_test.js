@@ -27,6 +27,7 @@ goog.require('lf.pred.JoinPredicate');
 goog.require('lf.proc.AggregationStep');
 goog.require('lf.proc.Relation');
 goog.require('lf.schema.DataStoreType');
+goog.require('lf.structs.set');
 goog.require('lf.testing.NullableDataGenerator');
 goog.require('lf.testing.hrSchema.MockDataGenerator');
 goog.require('lf.testing.proc.DummyStep');
@@ -283,7 +284,7 @@ function testExec_AvgDistinctNullableColumn() {
       nullableGenerator.sampleTableARows, [tableA.getName()]);
   checkCalculationForRelation(
       inputRelation, lf.fn.avg(lf.fn.distinct(tableA['id'])),
-      nullableGenerator.tableAGroundTruth.avgId, testFloatEquals).
+      nullableGenerator.tableAGroundTruth.avgDistinctId, testFloatEquals).
       then(asyncTestCase.continueTesting.bind(asyncTestCase), fail);
 }
 
@@ -444,6 +445,39 @@ function testExec_Geomean_Empty() {
 
 
 /**
+ * Tests for geomean distinct on TableA which has a mix of null and
+ * non-null values for the column.
+ */
+function testExec_GeomeanDistinctNullableColumn() {
+  asyncTestCase.waitForAsync('testExec_GeomeanDistinctNullableColumn');
+  var tableA = schemaWithNullable.table('TableA');
+  var inputRelation = lf.proc.Relation.fromRows(
+      nullableGenerator.sampleTableARows, [tableA.getName()]);
+  checkCalculationForRelation(
+      inputRelation, lf.fn.geomean(lf.fn.distinct(tableA['id'])),
+      nullableGenerator.tableAGroundTruth.geomeanDistinctId, testFloatEquals).
+      then(asyncTestCase.continueTesting.bind(asyncTestCase), fail);
+}
+
+
+/**
+ * Tests for Geomean on TableB which has only null values for the
+ * column.
+ */
+function testExec_Geomean_NullRows() {
+  asyncTestCase.waitForAsync('testExec_Geomean_NullRows');
+  var tableB = schemaWithNullable.table('TableB');
+  var inputRelation = lf.proc.Relation.fromRows(
+      nullableGenerator.sampleTableBRows, [tableB.getName()]);
+  checkCalculationForRelation(
+      inputRelation,
+      lf.fn.geomean(tableB['id']),
+      null, testEquals).
+      then(asyncTestCase.continueTesting.bind(asyncTestCase), fail);
+}
+
+
+/**
  * @param {!lf.schema.Column} aggregatedColumn The column to be calculated.
  * @param {number|!Array<number>} expectedValue The expected value for the
  *     aggregated column.
@@ -515,7 +549,8 @@ function checkCalculationForRelation(
   var aggregationStep = new lf.proc.AggregationStep([aggregatedColumn]);
   aggregationStep.addChild(childStep);
 
-  var journal = new lf.cache.Journal(hr.db.getGlobal(), []);
+  var journal =
+      new lf.cache.Journal(hr.db.getGlobal(), lf.structs.set.create());
   return aggregationStep.exec(journal).then(function(relations) {
     var relation = relations[0];
     if (expectedValue instanceof Array) {
@@ -546,7 +581,8 @@ function testExec_UsesExistingResult() {
   var aggregationStep = new lf.proc.AggregationStep([aggregatedColumn]);
   aggregationStep.addChild(childStep);
 
-  var journal = new lf.cache.Journal(hr.db.getGlobal(), []);
+  var journal =
+      new lf.cache.Journal(hr.db.getGlobal(), lf.structs.set.create());
   aggregationStep.exec(journal).then(function(relations) {
     assertEquals(
         aggregationResult,

@@ -237,6 +237,111 @@ function testSelectToSql_Join() {
       query.toSql());
 }
 
+function testSelectToSql_OuterJoin() {
+  var e = db.getSchema().getEmployee();
+  var d = db.getSchema().getDepartment();
+  var jh = db.getSchema().getJobHistory();
+  var pred1 = j.id.eq(e.jobId);
+  var pred2 = d.id.eq(e.departmentId);
+  var pred3 = j.id.eq(jh.jobId);
+  var query = db.select(e.firstName, e.lastName, d.name, j.title).
+      from(e).
+      leftOuterJoin(j, pred1).
+      leftOuterJoin(d, pred2).
+      leftOuterJoin(jh, pred3);
+  assertEquals(
+      'SELECT Employee.firstName, Employee.lastName,' +
+      ' Department.name, Job.title' +
+      ' FROM Employee LEFT OUTER JOIN Job ON (Employee.jobId = Job.id) ' +
+      'LEFT OUTER JOIN Department ON (Employee.departmentId = Department.id) ' +
+      'LEFT OUTER JOIN JobHistory ON (Job.id = JobHistory.jobId);',
+      query.toSql());
+}
+
+function testSelectToSql_InnerJoinWithOuterJoin() {
+  var e = db.getSchema().getEmployee();
+  var d = db.getSchema().getDepartment();
+  var jh = db.getSchema().getJobHistory();
+  var pred1 = j.id.eq(e.jobId);
+  var pred2 = d.id.eq(e.departmentId);
+  var pred3 = jh.jobId.eq(j.id);
+  var query = db.select(e.firstName, e.lastName, d.name, j.title).
+      from(e).
+      leftOuterJoin(j, pred1).
+      leftOuterJoin(d, pred2).
+      innerJoin(jh, pred3);
+  assertEquals(
+      'SELECT Employee.firstName, Employee.lastName,' +
+      ' Department.name, Job.title' +
+      ' FROM Employee' +
+      ' LEFT OUTER JOIN Job ON (Employee.jobId = Job.id)' +
+      ' LEFT OUTER JOIN Department ON (Employee.departmentId = Department.id)' +
+      ' INNER JOIN JobHistory ON (JobHistory.jobId = Job.id);',
+      query.toSql());
+  // Change order of inner and outer join compared to previous one.
+  pred1 = pred1.copy();
+  pred2 = pred2.copy();
+  pred3 = pred3.copy();
+  query = db.select(e.firstName, e.lastName, d.name, j.title).
+      from(e).
+      leftOuterJoin(j, pred1).
+      innerJoin(d, pred2).
+      leftOuterJoin(jh, pred3);
+  assertEquals(
+      'SELECT Employee.firstName, Employee.lastName,' +
+      ' Department.name, Job.title' +
+      ' FROM Employee' +
+      ' LEFT OUTER JOIN Job ON (Employee.jobId = Job.id)' +
+      ' INNER JOIN Department ON (Department.id = Employee.departmentId)' +
+      ' LEFT OUTER JOIN JobHistory ON (Job.id = JobHistory.jobId);',
+      query.toSql());
+}
+
+function testSelectToSql_WhereWithOuterJoin() {
+  var e = db.getSchema().getEmployee();
+  var d = db.getSchema().getDepartment();
+  var jh = db.getSchema().getJobHistory();
+  var pred1 = j.id.eq(e.jobId);
+  var pred2 = d.id.eq(e.departmentId);
+  var pred3 = j.id.eq(jh.jobId);
+  var query = db.select(e.firstName, e.lastName, d.name, j.title).
+      from(e).
+      leftOuterJoin(j, pred1).
+      leftOuterJoin(d, pred2).
+      innerJoin(jh, pred3).
+      where(j.id.eq(1));
+  assertEquals(
+      'SELECT Employee.firstName, Employee.lastName,' +
+      ' Department.name, Job.title' +
+      ' FROM Employee' +
+      ' LEFT OUTER JOIN Job ON (Employee.jobId = Job.id)' +
+      ' LEFT OUTER JOIN Department ON (Employee.departmentId = Department.id)' +
+      ' INNER JOIN JobHistory ON (Job.id = JobHistory.jobId)' +
+      ' WHERE Job.id = \'1\';',
+      query.toSql());
+  // In the following assert, where has a combined predicate.
+  pred1 = pred1.copy();
+  pred2 = pred2.copy();
+  pred3 = pred3.copy();
+  query = db.select(e.firstName, e.lastName, d.name, j.title).
+      from(e).
+      leftOuterJoin(j, pred1).
+      leftOuterJoin(d, pred2).
+      innerJoin(jh, pred3).
+      where(lf.op.or(lf.op.and(j.id.eq(1), d.id.eq(1)), jh.jobId.eq('1')));
+  assertEquals(
+      'SELECT Employee.firstName, Employee.lastName,' +
+      ' Department.name, Job.title' +
+      ' FROM Employee' +
+      ' LEFT OUTER JOIN Job ON (Employee.jobId = Job.id)' +
+      ' LEFT OUTER JOIN Department ON (Employee.departmentId = Department.id)' +
+      ' INNER JOIN JobHistory ON (Job.id = JobHistory.jobId)' +
+      ' WHERE ((Job.id = \'1\') AND' +
+      ' (Department.id = \'1\')) OR' +
+      ' (JobHistory.jobId = \'1\');',
+      query.toSql());
+}
+
 function testNull() {
   var e = db.getSchema().getEmployee();
   var row = e.createRow({

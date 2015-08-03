@@ -46,6 +46,27 @@ function testBetween() {
 }
 
 
+function testBetween_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.STRING, lf.eval.Type.BETWEEN);
+
+  var string1 = 'a';
+  var string2 = 'ab';
+  var string3 = 'abc';
+  var string4 = null;
+
+  assertTrue(evaluationFn(string1, [string1, string3]));
+  assertTrue(evaluationFn(string2, [string1, string3]));
+  // null test.
+  assertFalse(evaluationFn(string1, [string4, string3]));
+  assertFalse(evaluationFn(string4, [string1, string3]));
+  assertFalse(evaluationFn(string1, [string1, string4]));
+  assertFalse(evaluationFn(string1, [string4, string1]));
+  assertFalse(evaluationFn(string4, [string4, string4]));
+  assertFalse(evaluationFn(string1, [string4, string4]));
+}
+
+
 function testEq() {
   var evaluationFn = registry.getEvaluator(
       lf.Type.STRING, lf.eval.Type.EQ);
@@ -72,6 +93,26 @@ function testGte() {
 }
 
 
+function testGte_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.STRING, lf.eval.Type.GTE);
+
+  var string1 = 'a';
+  var string2 = 'ab';
+  var string3 = null;
+
+  assertTrue(evaluationFn(string2, string1));
+  assertTrue(evaluationFn(string2, string2));
+  assertFalse(evaluationFn(string1, string2));
+  // null test.
+  assertFalse(evaluationFn(string3, string1));
+  assertFalse(evaluationFn(string3, string2));
+  assertFalse(evaluationFn(string1, string3));
+  assertFalse(evaluationFn(string2, string3));
+  assertFalse(evaluationFn(string3, string3));
+}
+
+
 function testGt() {
   var evaluationFn = registry.getEvaluator(
       lf.Type.STRING, lf.eval.Type.GT);
@@ -82,6 +123,26 @@ function testGt() {
   assertTrue(evaluationFn(string2, string1));
   assertFalse(evaluationFn(string2, string2));
   assertFalse(evaluationFn(string1, string2));
+}
+
+
+function testGt_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.STRING, lf.eval.Type.GT);
+
+  var string1 = 'a';
+  var string2 = 'ab';
+  var string3 = null;
+
+  assertTrue(evaluationFn(string2, string1));
+  assertFalse(evaluationFn(string2, string2));
+  assertFalse(evaluationFn(string1, string2));
+  // null test.
+  assertFalse(evaluationFn(string3, string1));
+  assertFalse(evaluationFn(string3, string2));
+  assertFalse(evaluationFn(string1, string3));
+  assertFalse(evaluationFn(string2, string3));
+  assertFalse(evaluationFn(string3, string3));
 }
 
 
@@ -118,6 +179,26 @@ function testLte() {
 }
 
 
+function testLte_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.STRING, lf.eval.Type.LTE);
+
+  var string1 = 'a';
+  var string2 = 'ab';
+  var string3 = null;
+
+  assertTrue(evaluationFn(string1, string2));
+  assertTrue(evaluationFn(string1, string1));
+  assertFalse(evaluationFn(string2, string1));
+  // null test.
+  assertFalse(evaluationFn(string3, string1));
+  assertFalse(evaluationFn(string3, string2));
+  assertFalse(evaluationFn(string1, string3));
+  assertFalse(evaluationFn(string2, string3));
+  assertFalse(evaluationFn(string3, string3));
+}
+
+
 function testLt() {
   var evaluationFn = registry.getEvaluator(
       lf.Type.STRING, lf.eval.Type.LT);
@@ -128,6 +209,26 @@ function testLt() {
   assertTrue(evaluationFn(string1, string2));
   assertFalse(evaluationFn(string1, string1));
   assertFalse(evaluationFn(string2, string1));
+}
+
+
+function testLt_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.STRING, lf.eval.Type.LT);
+
+  var string1 = 'a';
+  var string2 = 'ab';
+  var string3 = null;
+
+  assertTrue(evaluationFn(string1, string2));
+  assertFalse(evaluationFn(string1, string1));
+  assertFalse(evaluationFn(string2, string1));
+  // null test.
+  assertFalse(evaluationFn(string3, string1));
+  assertFalse(evaluationFn(string3, string2));
+  assertFalse(evaluationFn(string1, string3));
+  assertFalse(evaluationFn(string2, string3));
+  assertFalse(evaluationFn(string3, string3));
 }
 
 
@@ -156,4 +257,26 @@ function testMatch() {
   assertTrue(evaluationFn(string, pattern1));
   assertTrue(evaluationFn(string, pattern2));
   assertFalse(evaluationFn(string, pattern3));
+}
+
+
+function testMatch_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.STRING, lf.eval.Type.MATCH);
+
+  var string = 'sampleName';
+  var string2 = null;
+
+  var pattern1 = /sampleName/;
+  var pattern2 = /\bsample[A-Za-z]+\b/;
+  var pattern3 = /SAMPLENAME/;
+  var pattern4 = null;
+
+  assertTrue(evaluationFn(string, pattern1));
+  assertTrue(evaluationFn(string, pattern2));
+  assertFalse(evaluationFn(string, pattern3));
+  // null check.
+  assertFalse(evaluationFn(string, pattern4));
+  assertFalse(evaluationFn(string2, pattern1));
+  assertFalse(evaluationFn(string2, pattern4));
 }

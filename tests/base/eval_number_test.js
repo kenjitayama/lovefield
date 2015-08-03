@@ -46,6 +46,26 @@ function testBetween() {
 }
 
 
+function testBetween_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.NUMBER, lf.eval.Type.BETWEEN);
+
+  var number1 = 1;
+  var number2 = 50;
+  var number3 = 100;
+  var number4 = null;
+
+  assertTrue(evaluationFn(number2, [number1, number3]));
+  // null test.
+  assertFalse(evaluationFn(number1, [number4, number3]));
+  assertFalse(evaluationFn(number4, [number1, number3]));
+  assertFalse(evaluationFn(number1, [number1, number4]));
+  assertFalse(evaluationFn(number1, [number4, number1]));
+  assertFalse(evaluationFn(number4, [number4, number4]));
+  assertFalse(evaluationFn(number1, [number4, number4]));
+}
+
+
 function testEq() {
   var evaluationFn = registry.getEvaluator(
       lf.Type.NUMBER, lf.eval.Type.EQ);
@@ -72,6 +92,26 @@ function testGte() {
 }
 
 
+function testGte_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.NUMBER, lf.eval.Type.GTE);
+
+  var number1 = 100;
+  var number2 = 200;
+  var number3 = null;
+
+  assertTrue(evaluationFn(number2, number1));
+  assertTrue(evaluationFn(number2, number2));
+  assertFalse(evaluationFn(number1, number2));
+  // null test.
+  assertFalse(evaluationFn(number3, number1));
+  assertFalse(evaluationFn(number3, number2));
+  assertFalse(evaluationFn(number1, number3));
+  assertFalse(evaluationFn(number2, number3));
+  assertFalse(evaluationFn(number3, number3));
+}
+
+
 function testGt() {
   var evaluationFn = registry.getEvaluator(
       lf.Type.NUMBER, lf.eval.Type.GT);
@@ -82,6 +122,26 @@ function testGt() {
   assertTrue(evaluationFn(number2, number1));
   assertFalse(evaluationFn(number2, number2));
   assertFalse(evaluationFn(number1, number2));
+}
+
+
+function testGt_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.NUMBER, lf.eval.Type.GT);
+
+  var number1 = 100;
+  var number2 = 200;
+  var number3 = null;
+
+  assertTrue(evaluationFn(number2, number1));
+  assertFalse(evaluationFn(number2, number2));
+  assertFalse(evaluationFn(number1, number2));
+  // null test.
+  assertFalse(evaluationFn(number3, number1));
+  assertFalse(evaluationFn(number3, number2));
+  assertFalse(evaluationFn(number1, number3));
+  assertFalse(evaluationFn(number2, number3));
+  assertFalse(evaluationFn(number3, number3));
 }
 
 
@@ -116,6 +176,26 @@ function testLte() {
 }
 
 
+function testLte_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.NUMBER, lf.eval.Type.LTE);
+
+  var number1 = 100;
+  var number2 = 200;
+  var number3 = null;
+
+  assertTrue(evaluationFn(number1, number2));
+  assertTrue(evaluationFn(number1, number1));
+  assertFalse(evaluationFn(number2, number1));
+  // null test.
+  assertFalse(evaluationFn(number3, number1));
+  assertFalse(evaluationFn(number3, number2));
+  assertFalse(evaluationFn(number1, number3));
+  assertFalse(evaluationFn(number2, number3));
+  assertFalse(evaluationFn(number3, number3));
+}
+
+
 function testLt() {
   var evaluationFn = registry.getEvaluator(
       lf.Type.NUMBER, lf.eval.Type.LT);
@@ -126,6 +206,26 @@ function testLt() {
   assertTrue(evaluationFn(number1, number2));
   assertFalse(evaluationFn(number1, number1));
   assertFalse(evaluationFn(number2, number1));
+}
+
+
+function testLt_Null() {
+  var evaluationFn = registry.getEvaluator(
+      lf.Type.NUMBER, lf.eval.Type.LT);
+
+  var number1 = 100;
+  var number2 = 200;
+  var number3 = null;
+
+  assertTrue(evaluationFn(number1, number2));
+  assertFalse(evaluationFn(number1, number1));
+  assertFalse(evaluationFn(number2, number1));
+  // null test.
+  assertFalse(evaluationFn(number3, number1));
+  assertFalse(evaluationFn(number3, number2));
+  assertFalse(evaluationFn(number1, number3));
+  assertFalse(evaluationFn(number2, number3));
+  assertFalse(evaluationFn(number3, number3));
 }
 
 
